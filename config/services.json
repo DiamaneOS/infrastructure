@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "note": "endpoint contract design minimal deployment selection 2026-09-11. Planned roles only: no provisioning, no addresses, no credentials, no secrets in this file (private deployment inputs injected at infrastructure staging). deploy/, systemd/, tests/, docs/OPERATIONS.md arrive with infrastructure staging.",
+  "hosts": [
+    {
+      "id": "release-primary",
+      "role": "EU primary: OS endpoints (time, connectivity, GNSS, provisioning, CT/components, browser/app delivery, OTA origin) + release origin + monitoring",
+      "jurisdiction": "DE",
+      "provider_candidate": "Hetzner (alternate: netcup)",
+      "status": "planned",
+      "address": null,
+      "verify_at": "FP6-101"
+    },
+    {
+      "id": "artifact-mirror-non-eu",
+      "role": "Independent non-EU mirror: identical signed artifacts + proof bundles + installer/static site copy (install path survives primary-jurisdiction outage)",
+      "jurisdiction": "IS (candidate: 1984 Hosting; alternates CH/NO)",
+      "provider_candidate": "1984 Hosting Iceland",
+      "status": "planned",
+      "address": null,
+      "verify_at": "FP6-101"
+    },
+    {
+      "id": "community-future",
+      "role": "Optional community/federation services ONLY if real demand + capacity review justify them (never a launch requirement); isolated from release/update infrastructure",
+      "jurisdiction": "DE",
+      "provider_candidate": "TBD at need (separate host + separate credentials from release-primary)",
+      "status": "planned-conditional",
+      "address": null,
+      "verify_at": "FP6-109"
+    }
+  ],
+  "services": [
+    {
+      "id": "os-updates",
+      "endpoints": [
+        "os-updates"
+      ],
+      "host": "release-primary",
+      "mirror": "artifact-mirror-non-eu",
+      "owner_task": "FP6-128",
+      "status": "planned"
+    },
+    {
+      "id": "app-delivery",
+      "endpoints": [
+        "apps-catalog",
+        "browser-update-meta",
+        "browser-apk-dl",
+        "info-release-feed"
+      ],
+      "host": "release-primary",
+      "mirror": "artifact-mirror-non-eu",
+      "owner_task": "FP6-110",
+      "status": "planned"
+    },
+    {
+      "id": "bootstrap",
+      "endpoints": [
+        "time",
+        "connectivity-check",
+        "online-probe",
+        "dns-check"
+      ],
+      "host": "release-primary",
+      "mirror": null,
+      "owner_task": "FP6-102",
+      "status": "planned"
+    },
+    {
+      "id": "gnss-assistance",
+      "endpoints": [
+        "psds-cache",
+        "supl"
+      ],
+      "host": "release-primary",
+      "mirror": null,
+      "owner_task": "FP6-103",
+      "status": "planned"
+    },
+    {
+      "id": "provisioning",
+      "endpoints": [
+        "rkp-proxy",
+        "widevine-proxy"
+      ],
+      "host": "release-primary",
+      "mirror": null,
+      "owner_task": "FP6-104",
+      "status": "planned"
+    },
+    {
+      "id": "browser-components",
+      "endpoints": [
+        "ct-mirror"
+      ],
+      "host": "release-primary",
+      "mirror": "artifact-mirror-non-eu",
+      "owner_task": "FP6-105",
+      "status": "planned"
+    }
+  ],
+  "credentials_policy": "Release/update hosts and community hosts use distinct hosts and distinct credentials with no shared admin path (endpoint contract design). Release private keys never reside on any host in this file. Community credentials cannot administer release infrastructure. Actual addresses, accounts, tokens and secrets are private deployment inputs injected at provisioning (infrastructure staging), never committed."
+}

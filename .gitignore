@@ -1,0 +1,25 @@
+# Private and generated state — never commit
+.DS_Store
+
+# Credentials, addresses and secrets are private deployment inputs (FP6-101)
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+*id_rsa*
+*id_ed25519*
+.env
+.env.*
+secrets*.json
+*token*.json
+*share*.txt
+SLIP39*.txt
+*address*.json
+inventory*.json
+
+# Maintainer-private planning bundle
+*diamaneos-development-plan*.md
+*diamaneos-task-packets*/
+*TASK-AUDIT*.md
