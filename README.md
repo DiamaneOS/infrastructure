@@ -7,7 +7,8 @@ Deployment maps and reproducible service configuration for DiamaneOS (FP6).
 Planned roles only: `config/services.json` selects EU primary, independent
 non-EU mirror, and conditional community separation with candidate providers.
 No provisioning, no signup, no device result claimed. `deploy/`, `systemd/`,
-`tests/`, `docs/OPERATIONS.md` arrive with infrastructure staging.
+`tests/` arrive with infrastructure staging. The [operations design](docs/OPERATIONS.md) records
+provider evidence, quotas, authority boundaries and activation requirements now.
 
 ## Privacy
 

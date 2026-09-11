@@ -1,33 +1,42 @@
 {
-  "schema_version": 1,
-  "note": "endpoint contract design minimal deployment selection 2026-09-11. Planned roles only: no provisioning, no addresses, no credentials, no secrets in this file (private deployment inputs injected at infrastructure staging). deploy/, systemd/, tests/, docs/OPERATIONS.md arrive with infrastructure staging.",
+  "schema_version": 2,
+  "note": "endpoint contract design minimal role selection; deployment remains infrastructure staging and endpoint owners. No host addresses, credentials, provisioning or live isolation proof claimed.",
   "hosts": [
     {
       "id": "release-primary",
-      "role": "EU primary: OS endpoints (time, connectivity, GNSS, provisioning, CT/components, browser/app delivery, OTA origin) + release origin + monitoring",
+      "role": "release",
       "jurisdiction": "DE",
-      "provider_candidate": "Hetzner (alternate: netcup)",
-      "status": "planned",
-      "address": null,
-      "verify_at": "FP6-101"
+      "provider_layer": "vps-primary",
+      "credential_class": "release-admin",
+      "management": "owner-vpn-and-provider-console",
+      "status": "planned"
     },
     {
       "id": "artifact-mirror-non-eu",
-      "role": "Independent non-EU mirror: identical signed artifacts + proof bundles + installer/static site copy (install path survives primary-jurisdiction outage)",
-      "jurisdiction": "IS (candidate: 1984 Hosting; alternates CH/NO)",
-      "provider_candidate": "1984 Hosting Iceland",
-      "status": "planned",
-      "address": null,
-      "verify_at": "FP6-101"
+      "role": "mirror",
+      "jurisdiction": "IS",
+      "provider_layer": "artifact-mirror-non-eu",
+      "credential_class": "mirror-admin",
+      "management": "owner-vpn-and-provider-console",
+      "status": "planned"
+    },
+    {
+      "id": "authoritative-dns",
+      "role": "dns",
+      "jurisdiction": "DE",
+      "provider_layer": "authoritative-dns",
+      "credential_class": "dns-admin",
+      "management": "provider-console",
+      "status": "existing-provider-planned-records"
     },
     {
       "id": "community-future",
-      "role": "Optional community/federation services ONLY if real demand + capacity review justify them (never a launch requirement); isolated from release/update infrastructure",
+      "role": "community",
       "jurisdiction": "DE",
-      "provider_candidate": "TBD at need (separate host + separate credentials from release-primary)",
-      "status": "planned-conditional",
-      "address": null,
-      "verify_at": "FP6-109"
+      "provider_layer": "vps-primary",
+      "credential_class": "community-admin",
+      "management": "separate-community-path",
+      "status": "conditional"
     }
   ],
   "services": [
@@ -39,66 +48,172 @@
       "host": "release-primary",
       "mirror": "artifact-mirror-non-eu",
       "owner_task": "FP6-128",
-      "status": "planned"
+      "status": "planned",
+      "activation": "blocked-pending-implementation",
+      "credentials": "none-read-only-serving"
     },
     {
-      "id": "app-delivery",
+      "id": "apps-catalog",
       "endpoints": [
-        "apps-catalog",
-        "browser-update-meta",
-        "browser-apk-dl",
-        "info-release-feed"
+        "apps-catalog"
       ],
       "host": "release-primary",
       "mirror": "artifact-mirror-non-eu",
       "owner_task": "FP6-110",
-      "status": "planned"
+      "status": "planned",
+      "activation": "blocked-pending-implementation",
+      "credentials": "none-read-only-serving"
     },
     {
-      "id": "bootstrap",
+      "id": "browser-component-check",
       "endpoints": [
-        "time",
-        "connectivity-check",
-        "online-probe",
-        "dns-check"
+        "browser-component-check"
+      ],
+      "host": "release-primary",
+      "mirror": null,
+      "owner_task": "FP6-105",
+      "status": "planned",
+      "activation": "blocked-pending-implementation",
+      "credentials": "none-read-only-serving"
+    },
+    {
+      "id": "browser-component-download",
+      "endpoints": [
+        "browser-component-download"
+      ],
+      "host": "release-primary",
+      "mirror": null,
+      "owner_task": "FP6-105",
+      "status": "planned",
+      "activation": "blocked-pending-implementation",
+      "credentials": "none-read-only-serving"
+    },
+    {
+      "id": "time",
+      "endpoints": [
+        "time"
       ],
       "host": "release-primary",
       "mirror": null,
       "owner_task": "FP6-102",
-      "status": "planned"
+      "status": "planned",
+      "activation": "blocked-pending-implementation",
+      "credentials": "none-read-only-serving"
     },
     {
-      "id": "gnss-assistance",
+      "id": "connectivity-check",
       "endpoints": [
-        "psds-cache",
+        "connectivity-check"
+      ],
+      "host": "release-primary",
+      "mirror": null,
+      "owner_task": "FP6-102",
+      "status": "planned",
+      "activation": "blocked-pending-implementation",
+      "credentials": "none-read-only-serving"
+    },
+    {
+      "id": "online-probe",
+      "endpoints": [
+        "online-probe"
+      ],
+      "host": "release-primary",
+      "mirror": null,
+      "owner_task": "FP6-102",
+      "status": "planned",
+      "activation": "blocked-pending-implementation",
+      "credentials": "none-read-only-serving"
+    },
+    {
+      "id": "psds-cache",
+      "endpoints": [
+        "psds-cache"
+      ],
+      "host": "release-primary",
+      "mirror": null,
+      "owner_task": "FP6-103",
+      "status": "planned",
+      "activation": "blocked-pending-implementation",
+      "credentials": "none-read-only-serving"
+    },
+    {
+      "id": "supl",
+      "endpoints": [
         "supl"
       ],
       "host": "release-primary",
       "mirror": null,
       "owner_task": "FP6-103",
-      "status": "planned"
+      "status": "planned",
+      "activation": "blocked-pending-implementation",
+      "credentials": "none-read-only-serving"
     },
     {
-      "id": "provisioning",
+      "id": "rkp-proxy",
       "endpoints": [
-        "rkp-proxy",
+        "rkp-proxy"
+      ],
+      "host": "release-primary",
+      "mirror": null,
+      "owner_task": "FP6-104",
+      "status": "planned",
+      "activation": "blocked-pending-implementation",
+      "credentials": "none-read-only-serving"
+    },
+    {
+      "id": "widevine-proxy",
+      "endpoints": [
         "widevine-proxy"
       ],
       "host": "release-primary",
       "mirror": null,
       "owner_task": "FP6-104",
-      "status": "planned"
+      "status": "planned",
+      "activation": "blocked-pending-implementation",
+      "credentials": "none-read-only-serving"
     },
     {
-      "id": "browser-components",
+      "id": "ct-mirror",
       "endpoints": [
         "ct-mirror"
       ],
       "host": "release-primary",
-      "mirror": "artifact-mirror-non-eu",
+      "mirror": null,
       "owner_task": "FP6-105",
-      "status": "planned"
+      "status": "planned",
+      "activation": "blocked-pending-implementation",
+      "credentials": "none-read-only-serving"
+    },
+    {
+      "id": "dns-check",
+      "endpoints": [
+        "dns-check"
+      ],
+      "host": "authoritative-dns",
+      "mirror": null,
+      "owner_task": "FP6-102",
+      "status": "planned",
+      "activation": "blocked-pending-implementation",
+      "credentials": "none-read-only-serving"
+    },
+    {
+      "id": "info-release-feed",
+      "endpoints": [
+        "info-release-feed"
+      ],
+      "host": "release-primary",
+      "mirror": "artifact-mirror-non-eu",
+      "owner_task": "FP6-112",
+      "status": "planned",
+      "activation": "blocked-pending-implementation",
+      "credentials": "none-read-only-serving"
     }
   ],
-  "credentials_policy": "Release/update hosts and community hosts use distinct hosts and distinct credentials with no shared admin path (endpoint contract design). Release private keys never reside on any host in this file. Community credentials cannot administer release infrastructure. Actual addresses, accounts, tokens and secrets are private deployment inputs injected at provisioning (infrastructure staging), never committed."
+  "management_policy": {
+    "signing_keys_on_hosts": false,
+    "community_can_administer_release": false,
+    "shared_host_admin_credentials": false,
+    "release_path_depends_on_federation": false,
+    "provider_recovery_required": true
+  }
 }
