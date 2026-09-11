@@ -1,6 +1,6 @@
 # infrastructure
 
-Deployment maps and reproducible service configuration for DiamaneOS (FP6).
+Endpoint contracts and deployment design for DiamaneOS.
 
 ## Status (endpoint contract design)
 
