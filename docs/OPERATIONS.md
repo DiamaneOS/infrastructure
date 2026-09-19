@@ -10,17 +10,32 @@ Hetzner's [Cloud capabilities](https://www.hetzner.com/cloud/cost-optimized/) in
 
 Hetzner documents [multiple MFA methods and recovery-key/manual recovery](https://docs.hetzner.com/general/security-and-identify/two-factor-authentication/). The documented methods do not establish FIDO2 support or verify any particular account. Infrastructure staging verifies a working primary and independent recovery path before relying on the account.
 
-1984's [VPS tariff](https://management.1984.hosting/product/pricelist/) has disk/traffic tiers suitable for sizing a static mirror. Its [terms](https://1984.hosting/tos/) apply Icelandic law and do not give us a reliable backup guarantee for an unmanaged VPS. Its [dashboard guide](https://management.1984.hosting/knowledge-base/dashboard/) documents email password recovery and service sharing, but only says to enable MFA “if available.” **Public documentation does not establish MFA availability or granular scope of service sharing.** Infrastructure staging must establish both account protection and console/recovery access before approving this candidate for deployment. If unavailable, return to the owner with a reviewed alternative; do not weaken the access requirement or pretend this research verified a logged-in account.
+1984's [VPS tariff](https://management.1984.hosting/product/pricelist/) has disk/traffic tiers suitable for sizing a static mirror. Its [terms](https://1984.hosting/tos/) apply Icelandic law and do not give us a reliable backup guarantee for an unmanaged VPS. Its [dashboard guide](https://management.1984.hosting/knowledge-base/dashboard/) documents email password recovery and service sharing, but only says to enable MFA “if available.” **Public documentation does not establish MFA availability or granular scope of service sharing.** Infrastructure staging must establish both account protection and console/recovery access before approving this candidate for deployment. If unavailable, reject the candidate and review an alternative; do not weaken the access requirement or pretend this research verified a logged-in account.
 
 INWX is the selected registrar/DNS provider; mailbox.org is the selected mailbox provider. INWX [documents DNSSEC signing](https://kb.inwx.com/en-us/3-nameserver/104-can-i-use-dnssec) and [global Anycast DNS](https://www.inwx.de/de/hosting/anycast-dns): a German operator is not a claim that every authoritative query stays in Germany. Keep real account state private. Provider capability documentation does not prove actual account protection or live DNS configuration.
 
 The direct-device Private DNS default is the Swiss [Quad9](https://docs.quad9.net/) service under its [privacy policy](https://www.quad9.net/privacy/policy/). Server-side NTS capability is documented by Swedish [Netnod](https://www.netnod.se/nts/network-time-security); multiple Netnod nodes are one operator. PTB authenticated capability/source diversity and live fresh-device behavior remain the `TIME-SOURCES` implementation gate. No optional resolver was selected without verified availability.
 
+## Portability and reproducibility
+
+The role, authority, capacity, failure and activation requirements in this
+document are the portable contract. Named providers are dated candidates, not
+dependencies embedded in an implementation. A substitute is acceptable only
+when its jurisdiction, recovery path, account separation, quotas, monitoring
+and outage behavior are verified against the same contract.
+
+Public automation must accept deployment-specific addresses, account IDs and
+credentials as external private inputs. It must not contain a maintainer's
+home paths, LAN topology, provider tokens or captured production state. Until
+the repository contains provisioning code, tests and an operator runbook, a
+reader can reproduce the contract validation but not a live deployment; the
+status must continue to say so.
+
 ## Authority and deployment boundaries
 
 | Role | Capability | Credentials / reachability |
 | --- | --- | --- |
-| release-primary | Read-only public serving; narrow fixed-upstream relays; separate staging and publishing processes | Host-scoped release admin, protected owner VPN/SSH; independent provider-console recovery |
+| release-primary | Read-only public serving; narrow fixed-upstream relays; separate staging and publishing processes | Host-scoped release admin, protected operator VPN/SSH; independent provider-console recovery |
 | artifact-mirror-non-eu | Static verified artifacts, recovery/site copy and independent monitoring | Different provider account and host-scoped mirror admin; no primary admin credential |
 | authoritative-dns | Canonical DNS and probe wildcard records at INWX | Separate DNS administration; no DNS management secret on public serving hosts |
 | community-future | Conditional support/federation only, separate VM if ever justified | Separate provider account/project, host, admin identities and backups; no release provider console, VPN peer, DNS write or signing access |

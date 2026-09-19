@@ -1,5 +1,12 @@
 # Private and generated state — never commit
 .DS_Store
+*.log
+*.orig
+*.rej
+private/
+evidence/
+out/
+state/
 
 # Credentials, addresses and secrets are private deployment inputs (FP6-101)
 *.key
