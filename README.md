@@ -15,3 +15,10 @@ provider evidence, quotas, authority boundaries and activation requirements now.
 Never commit: host addresses, account names, tokens, secrets, private keys,
 tester data, raw logs. Redact before staging. `.gitignore` is a last guard,
 not permission.
+
+## Licence
+
+Original DiamaneOS code, configuration and documentation in this repository
+are licensed under [Apache-2.0](LICENSE), except where another licence is
+identified. See [NOTICE](NOTICE) for attribution. Referenced upstream software
+retains its own licences; this repository's licence does not relicense those works.
