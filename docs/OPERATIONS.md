@@ -56,3 +56,23 @@ The mirror carries independently published recovery instructions and installer/s
 Infrastructure staging binds actual addresses, provider accounts, firewall rules, host/process quotas and recovery inputs privately, and validates both JSON documents using the tools CLI with an explicit path. Before exposing an endpoint, its owner closes the relevant `implementation_blockers`, provides native valid/corrupt/oversized fixtures and real timeout/stale/outage results, and records the implementation revision. Service monitoring supplies checks for freshness, TLS/DNS, saturating quotas, restore and independent alerts. Independent mirror recovery covers mirror drills; release signing and publication remain separate responsibilities. Domain management and third-party account changes remain owner actions.
 
 The validator documented in tools `docs/TESTING.md` is implemented. Provisioning and service commands require their corresponding implementations and acceptance evidence.
+
+## Build-host boundary
+
+The online build host synchronizes reviewed source inputs and produces
+unsigned build outputs. It uses a dedicated, non-SSH, non-sudo build identity;
+routine administration remains a separate key-only account with
+password-gated `sudo`. Production signing keys, signer tokens and recovery
+material are prohibited on the builder. An output becomes a release candidate
+only after the separate verification and offline-signing workflow accepts it.
+
+System package changes occur in an explicit maintenance window, not during a
+long or reproducibility-sensitive build. Wake-on-LAN and firmware power-loss
+recovery support availability, but neither bypasses authenticated management
+or authorizes a build, publication or signing operation.
+
+Treat remote-power mechanisms as independent evidence. A configured NIC is
+not a Wake-on-LAN result, a successful magic-packet boot is not an AC-loss
+recovery result, and either mechanism still requires post-boot health checks
+before a build lease is issued. Allow for the measured firmware and boot
+latency rather than declaring failure on an arbitrarily short SSH timeout.
