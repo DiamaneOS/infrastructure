@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+[Unit]
+Description=Manually unlocked encrypted attestation state
+
+[Mount]
+What=/dev/mapper/diamaneos-attestation-state
+Where=/var/lib/attestation
+Type=ext4
+Options=nodev,nosuid,noexec
+
+# Disabled at boot; mounting requires an open LUKS mapper.

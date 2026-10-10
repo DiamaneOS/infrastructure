@@ -1,0 +1,94 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+"""Assemble service vhosts and local includes into a new configuration directory."""
+from pathlib import Path
+import fnmatch
+import glob
+import re
+import sys
+
+if len(sys.argv) != 4:
+    raise SystemExit('usage: assemble-nginx primary|mirror|attestation SOURCE_ROOT OUTPUT')
+role, source, output = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
+if role not in {'primary', 'mirror', 'attestation'}:
+    raise SystemExit('invalid role')
+if output.exists():
+    raise SystemExit('output must be a new directory')
+files = {}
+roots = ['network', 'releases'] if role == 'primary' else ['releases' if role == 'mirror' else 'attestation']
+for root in roots:
+    for path in (source / root / 'nginx').iterdir():
+        if path.is_file() and not path.is_symlink():
+            files[path.name] = path.read_text()
+if role == 'primary':
+    files['nginx.conf'] = (source / 'network/nginx/nginx.conf').read_text()
+if role == 'mirror':
+    # Reuse the artifact handlers on fixed regional names. Each host answers
+    # its own ACME challenges; client fallback does not change shared DNS.
+    files['nginx.conf'] = files['nginx.conf'].replace(
+        'include releases.conf;', 'include releases.conf;\n    include mirror.conf;')
+    files['mirror.conf'] = '''server {
+    listen 80;
+    listen [::]:80;
+    server_name mirror.diamaneos.de;
+    location /.well-known/acme-challenge/ { root /var/lib/letsencrypt/webroot; }
+    location / { return 301 https://$host$request_uri; }
+}
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name mirror.diamaneos.de;
+    ssl_certificate /etc/letsencrypt/live/diamaneos-mirror/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/diamaneos-mirror/privkey.pem;
+    location = /healthz { default_type text/plain; return 200 "ready\\n"; }
+    location / { return 404; }
+}
+'''
+for name, text in files.items():
+    if not name.endswith('.conf'):
+        continue
+    if role == 'mirror':
+        names = {'releases.diamaneos.de': 'releases-na.diamaneos.de',
+                 'apps.diamaneos.de': 'apps-na.diamaneos.de'}
+        text = re.sub(r'(\bserver_name\s+)([^;]+);', lambda match:
+            match[1] + ' '.join(names.get(name, name)
+                               for name in match[2].split()) + ';', text)
+        text = text.replace('/etc/letsencrypt/live/diamaneos-artifacts/', '/etc/letsencrypt/live/diamaneos-mirror-artifacts/').replace('/etc/letsencrypt/live/diamaneos-primary/', '/etc/letsencrypt/live/diamaneos-mirror/')
+    # Advertising-industry opt-out has the same response on each public host.
+    before, separator, after = text.partition('\nstream {')
+    before = re.sub(r'(\n\s*server_name [^;]+;)', r'\1\n        include ads.conf;', before)
+    files[name] = before + separator + after
+files['ads.conf'] = '''location = /ads.txt {
+    default_type text/plain;
+    return 200 "placeholder.example.com, placeholder, DIRECT, placeholder\\n";
+}
+location = /app-ads.txt {
+    default_type text/plain;
+    return 200 "placeholder.example.com, placeholder, DIRECT, placeholder\\n";
+}
+'''
+
+# Follow local include dependencies from the active entry point.
+used = set()
+remaining = ['nginx.conf']
+while remaining:
+    name = remaining.pop()
+    if name in used:
+        continue
+    if name not in files:
+        raise SystemExit('Referenced nginx file is missing: ' + name)
+    used.add(name)
+    for match in re.finditer(r'(?m)^\s*include\s+([^;]+);', files[name]):
+        pattern = match[1].strip()
+        if (pattern.startswith(('"', "'")) and pattern[-1:] == pattern[:1]):
+            pattern = pattern[1:-1]
+        if not re.fullmatch(r'[A-Za-z0-9_.?*\[\]-]+', pattern):
+            raise SystemExit('Only local nginx include names are supported')
+        matches = sorted(name for name in files if fnmatch.fnmatchcase(name, pattern))
+        if not matches and not glob.has_magic(pattern):
+            raise SystemExit('Referenced nginx file is missing: ' + pattern)
+        remaining.extend(matches)
+
+output.mkdir(mode=0o755)
+for name in sorted(used):
+    (output / name).write_text(files[name])

@@ -1,0 +1,7 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+set -eu
+/usr/local/sbin/diamaneos-nginx-cert-access
+if systemctl is-active --quiet nginx; then
+    systemctl reload nginx
+fi

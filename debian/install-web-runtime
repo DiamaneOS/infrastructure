@@ -1,0 +1,48 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Install the platform binding after compatible nginx is installed. Does not
+# publish application content, replace nginx.conf, or start a public listener.
+set -euo pipefail
+test "$(id -u)" -eq 0
+role=${1:?usage: install-web-runtime primary|mirror|attestation}
+case $role in primary|mirror|attestation) ;; *) exit 2 ;; esac
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+source "$here/host/lib.sh"
+apt_install acl rsync certbot
+getent group diamaneos-tls >/dev/null || groupadd --system diamaneos-tls
+getent group tls >/dev/null || groupadd --system tls
+install -d -o root -g root -m 0755 /var/empty /etc/tls /etc/diamaneos
+install -d -o root -g tls -m 0750 /etc/tls/session-ticket-keys
+install -d -o root -g root -m 0755 /var/lib/letsencrypt/webroot
+usermod -a -G diamaneos-tls,tls www-data
+for name in session-ticket-keys-create session-ticket-keys-rotate; do
+    install -o root -g root -m 0755 "$here/../$name" "/usr/local/bin/$name"
+done
+for name in session-ticket-keys-create.service session-ticket-keys-rotate.service session-ticket-keys-rotate.timer; do
+    install -o root -g root -m 0644 "$here/../etc/systemd/system/$name" "/etc/systemd/system/$name"
+done
+install -d -m 0755 /etc/systemd/system/session-ticket-keys-create.service.d
+install -m 0644 "$here/session-ticket-keys-create.conf" /etc/systemd/system/session-ticket-keys-create.service.d/50-debian.conf
+mount_unit='etc-tls-session\x2dticket\x2dkeys.mount'
+sed "s/gid=tls/gid=$(getent group tls | cut -d: -f3)/" "$here/$mount_unit" > "/etc/systemd/system/$mount_unit"
+install -m 0755 "$here/nginx-cert-access" /usr/local/sbin/diamaneos-nginx-cert-access
+install -D -m 0755 "$here/reload-nginx" /etc/letsencrypt/renewal-hooks/deploy/reload-nginx
+printf '%s\n' "$role" > /etc/diamaneos/web-role
+if test "$role" = primary; then
+    system_user diamaneos-clock
+    install -m 0755 "$here/clock-readiness" /usr/local/bin/diamaneos-clock-readiness
+    install -m 0644 "$here/diamaneos-clock.service" /etc/systemd/system/diamaneos-clock.service
+    install -d -m 0755 /etc/systemd/system/nginx.service.d
+    printf '[Unit]\nWants=diamaneos-clock.service\nAfter=diamaneos-clock.service\n' > /etc/systemd/system/nginx.service.d/20-clock-readiness.conf
+fi
+install -d -m 0755 /etc/systemd/system/diamaneos-egress.service.d
+printf '[Service]\nCapabilityBoundingSet=CAP_NET_ADMIN\n' > /etc/systemd/system/diamaneos-egress.service.d/20-network-admin.conf
+install -m 0755 "$here/refresh-egress" /usr/local/sbin/diamaneos-refresh-egress
+install -m 0644 "$here/egress_config.py" /usr/local/sbin/egress_config.py
+install -m 0644 "$here/diamaneos-egress.service" /etc/systemd/system/diamaneos-egress.service
+install -m 0644 "$here/diamaneos-egress.timer" /etc/systemd/system/diamaneos-egress.timer
+systemctl daemon-reload
+systemctl enable --now "$mount_unit" session-ticket-keys-create.service
+systemctl enable session-ticket-keys-rotate.timer diamaneos-egress.timer
+if test "$role" = primary; then systemctl enable diamaneos-clock.service; fi
+/usr/local/sbin/diamaneos-nginx-cert-access

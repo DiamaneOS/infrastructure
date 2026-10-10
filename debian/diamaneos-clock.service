@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+[Unit]
+Description=Authenticated local clock readiness for HTTPS time
+After=chrony.service
+Wants=chrony.service
+After=diamaneos-egress.service
+Requires=diamaneos-egress.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=diamaneos-clock
+Group=diamaneos-clock
+RuntimeDirectory=diamaneos-clock
+RuntimeDirectoryMode=0755
+ExecStart=/usr/local/bin/diamaneos-clock-readiness
+RestrictAddressFamilies=AF_INET AF_UNIX
+InaccessiblePaths=-/run/chrony
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/32
+WatchdogSec=45s
+TimeoutStartSec=20s
+Restart=on-failure
+RestartSec=2s
+MemoryMax=32M
+TasksMax=8
+UMask=0022
+
+[Install]
+WantedBy=multi-user.target

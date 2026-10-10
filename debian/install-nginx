@@ -1,0 +1,28 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Install the runtime without exposing a distribution default site.
+set -euo pipefail
+test "$(id -u)" -eq 0
+if systemctl --quiet is-active nginx; then
+    echo 'Runtime installation requires nginx to be stopped.' >&2
+    exit 1
+fi
+systemctl mask nginx.service
+created_policy=0
+if [ ! -e /usr/sbin/policy-rc.d ]; then
+    printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+    chmod 0755 /usr/sbin/policy-rc.d
+    created_policy=1
+fi
+cleanup() {
+    if [ "$created_policy" = 1 ]; then rm -f /usr/sbin/policy-rc.d; fi
+}
+trap cleanup EXIT
+export DEBIAN_FRONTEND=noninteractive
+apt-get install -y -q --no-install-recommends nginx
+/usr/sbin/nginx -v
+if systemctl --quiet is-active nginx; then
+    echo 'Unexpected running service during runtime staging.' >&2
+    exit 1
+fi
+echo 'nginx installed and masked until its service configuration is in place.'

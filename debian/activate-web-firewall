@@ -1,0 +1,27 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+"""Open only the selected role's public ports, preserving private management."""
+import json
+from pathlib import Path
+import subprocess
+
+role = Path('/etc/diamaneos/web-role').read_text().strip()
+if role not in {'primary', 'mirror', 'attestation'}:
+    raise SystemExit('invalid web role')
+host = json.loads(Path('/etc/diamaneos/host.json').read_text())
+if host.get('management_mode') != 'wireguard' or host['management_cidrs']:
+    raise SystemExit('verified WireGuard-only management required')
+subprocess.run(['systemctl', 'is-active', '--quiet', 'wg-quick@wg-mgmt'], check=True)
+source = Path(__file__).resolve().parent / 'host/files/etc/nftables.conf'
+ports = '80, 443, 7275' if role == 'primary' else '80, 443'
+text = source.read_text().replace('        udp sport 547 udp dport 546 accept',
+    '        udp sport 547 udp dport 546 accept\n' +
+    f'        tcp dport {{ {ports} }} ct state new accept')
+candidate = Path('/etc/nftables.conf.candidate')
+candidate.write_text(text)
+subprocess.run(['nft', '-c', '-f', str(candidate)], check=True)
+target = Path('/etc/nftables.conf')
+if target.exists():
+    Path('/etc/diamaneos/firewall-before-web.nft').write_text(target.read_text())
+candidate.replace(target)
+subprocess.run(['nft', '-f', str(target)], check=True)

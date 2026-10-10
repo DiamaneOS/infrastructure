@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+[Unit]
+Description=Volatile non-swappable TLS session ticket keys
+Before=session-ticket-keys-create.service
+
+[Mount]
+What=tmpfs
+Where=/etc/tls/session-ticket-keys
+Type=tmpfs
+Options=mode=0750,uid=0,gid=tls,size=1M,noswap,nodev,nosuid,noexec
+
+[Install]
+WantedBy=multi-user.target
