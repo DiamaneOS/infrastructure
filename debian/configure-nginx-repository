@@ -1,0 +1,54 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Debian platform binding for the current upstream nginx configuration.
+set -euo pipefail
+test "$(id -u)" -eq 0
+. /etc/os-release
+test "$ID" = debian && test "$VERSION_ID" = 13
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get install -y -q --no-install-recommends ca-certificates curl gnupg
+temporary=$(mktemp -d)
+trap 'gpgconf --homedir "$temporary" --kill all >/dev/null 2>&1 || true; rm -rf "$temporary"' EXIT
+chmod 0700 "$temporary"
+curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
+    https://nginx.org/keys/nginx_signing.key -o "$temporary/signing.key"
+gpg --batch --homedir "$temporary" --import "$temporary/signing.key"
+# Pin all three vendor package-signing keys, including the 2024 rollover.
+# Sources: nginx.org/en/pgp_keys.html and nginx.org/keys/nginx_signing.key.
+fingerprints=(
+    573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62
+    8540A6F18833A80E9C1653A42FD21310B49F6B46
+    9E9BE90EACBCDE69FE9B204CBCDCD8A38D88A2B3
+)
+for fingerprint in "${fingerprints[@]}"; do
+    gpg --batch --homedir "$temporary" --with-colons --fingerprint "$fingerprint" |
+        awk -F: -v expected="$fingerprint" '$1 == "fpr" && $10 == expected { found = 1 } END { exit !found }'
+done
+gpg --batch --homedir "$temporary" --export "${fingerprints[@]}" > "$temporary/archive-keyring.gpg"
+test -s "$temporary/archive-keyring.gpg"
+install -o root -g root -m 0644 "$temporary/archive-keyring.gpg" /usr/share/keyrings/nginx-archive-keyring.gpg
+cat > /etc/apt/sources.list.d/diamaneos-nginx.sources <<'EOF'
+Types: deb
+URIs: https://nginx.org/packages/debian
+Suites: trixie
+Components: nginx
+Signed-By: /usr/share/keyrings/nginx-archive-keyring.gpg
+EOF
+cat > /etc/apt/preferences.d/diamaneos-nginx <<'EOF'
+Package: nginx nginx-module-*
+Pin: origin nginx.org
+Pin-Priority: 900
+EOF
+apt-get update -q
+candidate=$(apt-cache policy nginx | awk '/Candidate:/ {print $2}')
+test -n "$candidate" && test "$candidate" != '(none)'
+dpkg --compare-versions "$candidate" ge 1.29.8
+printf 'Verified nginx repository; compatible candidate: %s\n' "$candidate"
+
+# Include signed vendor security releases in the existing unattended policy.
+cat > /etc/apt/apt.conf.d/53diamaneos-nginx-unattended <<'EOF'
+Unattended-Upgrade::Origins-Pattern {
+    "origin=nginx,archive=stable,label=nginx,codename=trixie";
+};
+EOF

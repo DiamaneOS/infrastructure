@@ -1,0 +1,106 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+"""Restrict public service UIDs to the role's fixed destinations.
+
+All names must resolve before the atomic nft transaction. An unsuccessful refresh
+leaves existing entries to expire after 30 minutes, rather than opening egress.
+"""
+import ipaddress
+from pathlib import Path
+import pwd
+import socket
+import subprocess
+from egress_config import load_destinations
+
+role = Path('/etc/diamaneos/web-role').read_text().strip()
+if role not in {'primary', 'mirror', 'attestation'}:
+    raise SystemExit('unsupported host role')
+web = pwd.getpwnam('www-data').pw_uid
+try:
+    clock = pwd.getpwnam('diamaneos-clock').pw_uid if role == 'primary' else None
+except KeyError:
+    clock = None
+destinations = {}
+try:
+    configured = load_destinations()
+except (ValueError, OSError, UnicodeError):
+    raise SystemExit('Invalid external service destination configuration') from None
+if role == 'primary':
+    destinations['https'] = (443, ['www.gstatic.com', 'remoteprovisioning.googleapis.com',
+        'www.googleapis.com', 'path1.xtracloud.net', 'gs-loc.apple.com'])
+    destinations['supl'] = (7275, ['supl.google.com'])
+if role == 'attestation' and 'smtp' in configured:
+    destinations['smtp'] = configured['smtp']
+
+try:
+    monitor = pwd.getpwnam('diamaneos-monitor').pw_uid
+except KeyError:
+    monitor = None
+if monitor is not None and 'monitor' in configured:
+    destinations['monitor'] = configured['monitor']
+
+addresses = {}
+for key, (_, names) in destinations.items():
+    found = {4: set(), 6: set()}
+    for name in names:
+        answers = socket.getaddrinfo(name, None, type=socket.SOCK_STREAM)
+        if not answers:
+            raise SystemExit('empty DNS answer')
+        for family, _, _, _, peer in answers:
+            address = ipaddress.ip_address(peer[0])
+            if not address.is_global:
+                raise SystemExit('non-public upstream address refused')
+            found[address.version].add(str(address))
+    addresses[key] = found
+
+# The mirror's self-check is explicit loopback, not NSS's synthesized list of
+# this host's public, WireGuard and link-local interface addresses.
+if 'monitor' in addresses:
+    addresses['monitor'][4].add('127.0.0.1')
+
+lines = ['destroy table inet diamaneos_egress', 'table inet diamaneos_egress {']
+for key, found in addresses.items():
+    for version in (4, 6):
+        kind = 'ipv4_addr' if version == 4 else 'ipv6_addr'
+        lines += [f' set {key}{version} {{ type {kind}; flags timeout; timeout 30m;']
+        if found[version]:
+            lines += ['  elements = { ' + ', '.join(sorted(found[version])) + ' }']
+        lines += [' }']
+lines += [' chain output { type filter hook output priority 10; policy accept;']
+users = [web]
+if role == 'attestation':
+    users.append(pwd.getpwnam('attestation').pw_uid)
+if monitor is not None:
+    users.append(monitor)
+for user in users:
+    lines += [f'  meta skuid {user} ct state established,related accept',
+        f'  meta skuid {user} ip daddr 127.0.0.53 udp dport 53 accept',
+        f'  meta skuid {user} ip daddr 127.0.0.53 tcp dport 53 accept']
+if role == 'primary':
+    for key in ('https', 'supl'):
+        port = destinations[key][0]
+        for version in (4, 6):
+            proto = 'ip' if version == 4 else 'ip6'
+            lines += [f'  meta skuid {web} {proto} daddr @{key}{version} tcp dport {port} accept']
+if role == 'attestation':
+    lines += [f'  meta skuid {web} ip6 daddr ::1 tcp dport 8080 accept']
+    app = pwd.getpwnam('attestation').pw_uid
+    if 'smtp' in destinations:
+        port = destinations['smtp'][0]
+        for version in (4, 6):
+            proto = 'ip' if version == 4 else 'ip6'
+            lines += [f'  meta skuid {app} {proto} daddr @smtp{version} tcp dport {port} accept']
+if 'monitor' in destinations:
+    for version in (4, 6):
+        proto = 'ip' if version == 4 else 'ip6'
+        lines += [f'  meta skuid {monitor} {proto} daddr @monitor{version} tcp dport 443 accept']
+for user in users:
+    lines += [f'  meta skuid {user} reject']
+if clock is not None:
+    lines += [f'  meta skuid {clock} ct state established,related accept',
+        f'  meta skuid {clock} ip daddr 127.0.0.1 udp dport 323 accept',
+        f'  meta skuid {clock} reject']
+lines += [' }', '}']
+policy = '\n'.join(lines) + '\n'
+subprocess.run(['nft', '-c', '-f', '-'], input=policy, text=True, check=True)
+subprocess.run(['nft', '-f', '-'], input=policy, text=True, check=True)

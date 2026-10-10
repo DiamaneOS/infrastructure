@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+[Unit]
+Description=Refresh fixed service destination firewall sets
+After=network-online.target systemd-resolved.service
+Wants=network-online.target
+Before=nginx.service attestation.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/diamaneos-refresh-egress
+TimeoutStartSec=60s
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+MemoryDenyWriteExecute=yes
+LimitCORE=0
+
+MemoryMax=128M
+TasksMax=32
+LimitNOFILE=256
+UMask=0077

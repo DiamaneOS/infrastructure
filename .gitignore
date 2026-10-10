@@ -11,3 +11,9 @@
 /sysctl/
 /units/
 /venv/
+
+hosts.private.sh
+
+servers.private.sh
+
+__pycache__/

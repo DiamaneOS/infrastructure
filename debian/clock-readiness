@@ -1,0 +1,124 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+"""Expose HTTPS time only while authenticated chrony sources are healthy."""
+import csv
+import json
+import math
+import os
+from pathlib import Path
+import socket
+import shlex
+import subprocess
+import sys
+import time
+
+MIN_SELECTED_SOURCES = 3
+MAX_AGE_SECONDS = 300
+MAX_FUTURE_SECONDS = 5
+MAX_ERROR_SECONDS = 1
+CHECK_INTERVAL_SECONDS = 15
+QUERY_TIMEOUT_SECONDS = 5
+RUNTIME = Path('/run/diamaneos-clock')
+TRACKING_FIELDS = ('reference_id', 'reference_address', 'stratum', 'reference_time',
+    'system_offset', 'last_offset', 'rms_offset', 'frequency', 'residual_frequency',
+    'skew', 'root_delay', 'root_dispersion', 'update_interval', 'leap_status')
+SOURCE_FIELDS = ('mode', 'selection', 'address', 'stratum', 'poll', 'reach',
+    'last_receive', 'original_offset', 'adjusted_offset', 'error')
+
+
+def rows(text, fields):
+    for values in csv.reader(text.splitlines()):
+        if len(values) != len(fields):
+            raise ValueError('unexpected chrony format')
+        yield dict(zip(fields, values))
+
+
+def authenticated_policy(text):
+    directives = [shlex.split(line, comments=True) for line in text.splitlines()]
+    directives = [row for row in directives if row]
+    if any(row[0] in ('pool', 'peer', 'refclock', 'sourcedir', 'confdir', 'include', 'local')
+            for row in directives):
+        return False
+    servers = [row for row in directives if row[0] == 'server']
+    return (len(servers) >= MIN_SELECTED_SOURCES and
+        all('nts' in row[2:] and 'trust' not in row[2:] for row in servers) and
+        [row for row in directives if row[0] == 'authselectmode'] == [['authselectmode', 'require']] and
+        [row for row in directives if row[0] == 'minsources'] == [['minsources', str(MIN_SELECTED_SOURCES)]])
+
+
+def health(tracking, sources, now):
+    row, = list(rows(tracking, TRACKING_FIELDS))
+    numbers = [float(row[name]) for name in ('reference_time', 'system_offset',
+        'root_delay', 'root_dispersion')]
+    if not all(math.isfinite(n) for n in numbers):
+        raise ValueError('nonfinite tracking value')
+    age = now - numbers[0]
+    error = abs(numbers[1]) + numbers[3] + numbers[2] / 2
+    if (row['reference_id'] == '7F7F0101' or
+            row['leap_status'] not in ('Normal', 'Insert second', 'Delete second')
+            or not -MAX_FUTURE_SECONDS <= age <= MAX_AGE_SECONDS
+            or numbers[2] < 0 or numbers[3] < 0
+            or not 0 <= error <= MAX_ERROR_SECONDS):
+        return {'healthy': False, 'reason': 'clock-not-current'}
+    selected = set()
+    best = None
+    for entry in rows(sources, SOURCE_FIELDS):
+        if (entry['mode'] == '^' and entry['selection'] in ('*', '+') and
+                int(entry['reach']) > 0 and
+                0 <= int(entry['last_receive']) <= MAX_AGE_SECONDS):
+            selected.add(entry['address'])
+            if entry['selection'] == '*':
+                best = entry['address']
+    if best is None or row['reference_address'] != best:
+        return {'healthy': False, 'reason': 'reference-not-authenticated'}
+    return {'healthy': len(selected) >= MIN_SELECTED_SOURCES,
+            'reason': 'ready' if len(selected) >= MIN_SELECTED_SOURCES else 'insufficient-authenticated-sources',
+            'selected_sources': len(selected), 'reference_age_seconds': round(age),
+            'error_bound_seconds': error}
+
+
+def query(command):
+    return subprocess.check_output(['/usr/bin/chronyc', '-c', '-h',
+        '127.0.0.1', command], text=True,
+        timeout=QUERY_TIMEOUT_SECONDS, env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
+
+
+def notify(message):
+    address = os.environ.get('NOTIFY_SOCKET')
+    if address:
+        if address.startswith('@'):
+            address = '\0' + address[1:]
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as channel:
+            channel.sendto(message.encode(), address)
+
+
+def main():
+    if sys.argv[1:] not in ([], ['--once']):
+        raise SystemExit('usage: clock-readiness [--once]')
+    while True:
+        try:
+            policy = Path('/etc/chrony/chrony.conf')
+            st = policy.stat()
+            if st.st_uid != 0 or st.st_mode & 0o022 or not authenticated_policy(policy.read_text()):
+                result = {'healthy': False, 'reason': 'authenticated-clock-policy-missing'}
+            else:
+                result = health(query('tracking'), query('sources'), time.time())
+        except (OSError, ValueError, csv.Error, subprocess.SubprocessError):
+            result = {'healthy': False, 'reason': 'clock-monitor-unavailable'}
+        marker = RUNTIME / 'ready'
+        if result['healthy']:
+            marker.touch()
+        else:
+            marker.unlink(missing_ok=True)
+        temporary = RUNTIME / 'status.tmp'
+        temporary.write_text(json.dumps(result) + '\n')
+        temporary.replace(RUNTIME / 'status.json')
+        notify('READY=1\nWATCHDOG=1')
+        if sys.argv[1:] == ['--once']:
+            print(json.dumps(result))
+            return 0 if result['healthy'] else 1
+        time.sleep(CHECK_INTERVAL_SECONDS)
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

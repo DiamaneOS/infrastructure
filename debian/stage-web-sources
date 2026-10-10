@@ -1,0 +1,35 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+"""Stage committed public configuration, never untracked secrets or git data."""
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+if len(sys.argv) != 3:
+    raise SystemExit('usage: stage-web-sources CLONE_PARENT NEW_STAGE_DIRECTORY')
+parent, destination = map(Path, sys.argv[1:])
+destination.mkdir(mode=0o700)  # Refuse to overwrite a previous deployment.
+sources = [
+    ('infrastructure', 'infrastructure', ['debian', 'session-ticket-keys-create',
+        'session-ticket-keys-rotate', 'etc/systemd/system/session-ticket-keys-create.service',
+        'etc/systemd/system/session-ticket-keys-rotate.service',
+        'etc/systemd/system/session-ticket-keys-rotate.timer']),
+    ('network-services', 'network', ['nginx']),
+    ('releases.diamaneos.de', 'releases', ['nginx']),
+    ('AttestationServer', 'attestation', ['nginx', 'systemd/system/attestation.service']),
+]
+pins = {}
+for repository, prefix, paths in sources:
+    root = parent / repository
+    subprocess.run(['git', '-C', str(root), 'diff', '--exit-code', 'HEAD', '--', *paths],
+                   check=True, stdout=subprocess.DEVNULL)
+    pins[repository] = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+    archive = subprocess.check_output(['git', '-C', str(root), 'archive', '--format=tar',
+                                     '--prefix=' + prefix + '/', 'HEAD', *paths])
+    subprocess.run(['tar', '-xf', '-', '-C', str(destination)], input=archive, check=True)
+# The assembly adapter expects the portable unit at this explicit path.
+(destination / 'attestation/attestation.service').write_bytes(
+    (destination / 'attestation/systemd/system/attestation.service').read_bytes())
+(destination / 'source-pins.json').write_text(json.dumps(pins, indent=2) + '\n')
+print('Committed configuration exported.')

@@ -1,0 +1,26 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Grant the serving group access only to active keys from approved lineages.
+set -euo pipefail
+test "$(id -u)" -eq 0
+getent group diamaneos-tls >/dev/null
+for directory in /etc/letsencrypt /etc/letsencrypt/live /etc/letsencrypt/archive; do
+    test ! -d "$directory" || setfacl -m g:diamaneos-tls:--x "$directory"
+done
+for lineage in diamaneos-primary diamaneos-artifacts diamaneos-supl diamaneos-mirror diamaneos-mirror-artifacts diamaneos-attestation; do
+    test -d "/etc/letsencrypt/live/$lineage" || continue
+    for directory in "/etc/letsencrypt/live/$lineage" "/etc/letsencrypt/archive/$lineage"; do
+        setfacl -m g:diamaneos-tls:--x "$directory"
+    done
+    current=$(readlink -f "/etc/letsencrypt/live/$lineage/privkey.pem")
+    for key in "/etc/letsencrypt/archive/$lineage"/privkey*.pem; do
+        if [[ -f $key && $key != "$current" ]]; then
+            setfacl -m g:diamaneos-tls:--- "$key"
+        fi
+    done
+    for name in fullchain.pem privkey.pem; do
+        path="/etc/letsencrypt/live/$lineage/$name"
+        setfacl -m g:diamaneos-tls:r-- "$path"
+        runuser -u www-data -g www-data -G diamaneos-tls -- test -r "$path"
+    done
+done
