@@ -1,0 +1,208 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+"""Apply validated, private host inputs without changing addresses or routes."""
+import base64
+import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import tempfile
+
+
+def write(path, text, mode=0o644):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=path.name + '.', dir=path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(text)
+            stream.flush()
+            os.fchmod(stream.fileno(), mode)
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def source_rules(cidrs, required=True):
+    if not isinstance(cidrs, list):
+        raise ValueError('management_cidrs must be a list')
+    if not int(required) <= len(cidrs) <= 16:
+        raise ValueError('management source count is out of range')
+    networks = [ipaddress.ip_network(cidr, strict=True) for cidr in cidrs]
+    if any(not network.is_global or network.prefixlen == 0 for network in networks):
+        raise ValueError('management source must be a bounded public address range')
+    return ''.join(f'        ip{6 if network.version == 6 else ""} saddr {network} '
+                   'tcp dport 22 ct state new accept\n' for network in networks)
+
+
+def management_address(value):
+    address = ipaddress.ip_interface(value)
+    private_ranges = ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16')
+    if (address.version != 4 or address.network.prefixlen != 32 or
+            not any(address.ip in ipaddress.ip_network(net) for net in private_ranges)):
+        raise ValueError('management tunnel addresses must be individual RFC1918 IPv4 hosts')
+    return str(address)
+
+
+def wireguard_settings(config):
+    settings = config.get('wireguard')
+    if not isinstance(settings, dict) or set(settings) != {'listen_port', 'address', 'peers'}:
+        raise ValueError('wireguard requires listen_port, address and peers')
+    port = settings['listen_port']
+    if type(port) is not int or not 1024 <= port <= 65535:
+        raise ValueError('invalid WireGuard UDP port')
+    address = management_address(settings['address'])
+    peers = settings['peers']
+    if not isinstance(peers, list) or not 1 <= len(peers) <= 16:
+        raise ValueError('WireGuard requires 1 to 16 management peers')
+    addresses = {address}
+    keys = set()
+    validated = []
+    for peer in peers:
+        if not isinstance(peer, dict) or set(peer) != {'address', 'public_key'}:
+            raise ValueError('WireGuard peers require only address and public_key')
+        peer_address = management_address(peer['address'])
+        key = peer['public_key']
+        if not isinstance(key, str):
+            raise ValueError('invalid WireGuard public key')
+        try:
+            decoded = base64.b64decode(key, validate=True)
+        except ValueError as error:
+            raise ValueError('invalid WireGuard public key') from error
+        if (len(decoded) != 32 or not any(decoded) or
+                base64.b64encode(decoded).decode('ascii') != key):
+            raise ValueError('invalid WireGuard public key')
+        if peer_address in addresses or key in keys:
+            raise ValueError('WireGuard peer addresses and keys must be unique')
+        addresses.add(peer_address)
+        keys.add(key)
+        validated.append({'address': peer_address, 'public_key': key})
+    return {'listen_port': port, 'address': address, 'peers': validated}
+
+
+def management_rules(config):
+    """Render the selected policy; any public fallback is explicit and bounded."""
+    mode = config.get('management_mode', 'source-restricted')
+    cidrs = config['management_cidrs']
+    if mode not in ('source-restricted', 'key-only', 'wireguard'):
+        raise ValueError('unknown management mode')
+    if mode != 'wireguard' and 'wireguard' in config:
+        raise ValueError('WireGuard settings require wireguard management mode')
+    if mode == 'key-only':
+        if not isinstance(cidrs, list) or cidrs:
+            raise ValueError('key-only management must have an empty source list')
+        return '        tcp dport 22 ct state new accept\n'
+    if mode == 'source-restricted':
+        return source_rules(cidrs)
+    settings = wireguard_settings(config)
+    peers = ', '.join(peer['address'].split('/')[0] for peer in settings['peers'])
+    # The tunnel grants only SSH to this host, never routing, DNS or access to
+    # other local listeners. WireGuard also authenticates the peer source /32.
+    return (f'        iifname "wg-mgmt" ip saddr {{ {peers} }} tcp dport 22 ct state new accept\n'
+            '        iifname "wg-mgmt" drop\n'
+            f'        udp dport {settings["listen_port"]} ct state new accept\n' +
+            source_rules(cidrs, required=False))
+
+
+def configure_wireguard(settings):
+    directory = Path('/etc/wireguard')
+    directory.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(directory, 0o700)
+    key_path = directory / 'management.key'
+    if not key_path.exists():
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'wb') as stream:
+            subprocess.run(['wg', 'genkey'], stdout=stream, check=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+    key_stat = key_path.lstat()
+    if (not stat.S_ISREG(key_stat.st_mode) or key_stat.st_uid != 0 or
+            stat.S_IMODE(key_stat.st_mode) & 0o077):
+        raise SystemExit('WireGuard private key must be a root-only regular file')
+    private_key = key_path.read_text().strip()
+    # No shell hooks, DNS override, default route, NAT or saved runtime state.
+    text = (f'[Interface]\nAddress = {settings["address"]}\n'
+            f'ListenPort = {settings["listen_port"]}\nPrivateKey = {private_key}\n')
+    for peer in settings['peers']:
+        text += f'\n[Peer]\nPublicKey = {peer["public_key"]}\nAllowedIPs = {peer["address"]}\n'
+    target = directory / 'wg-mgmt.conf'
+    unchanged = target.exists() and target.read_text() == text
+    write(target, text, 0o600)
+    subprocess.run(['systemctl', 'enable', 'wg-quick@wg-mgmt.service'], check=True)
+    active = subprocess.run(['systemctl', 'is-active', '--quiet', 'wg-quick@wg-mgmt.service']).returncode == 0
+    if active and not unchanged:
+        # Rebuild addresses and peer routes as well as keys. Routine deploys
+        # leave an unchanged tunnel up; topology changes briefly interrupt it.
+        subprocess.run(['systemctl', 'restart', 'wg-quick@wg-mgmt.service'], check=True)
+    elif not active:
+        subprocess.run(['systemctl', 'start', 'wg-quick@wg-mgmt.service'], check=True)
+
+
+def main():
+    path = Path('/etc/diamaneos/host.json')
+    if path.stat().st_uid != 0 or path.stat().st_mode & 0o022:
+        raise SystemExit('private host configuration must be root-owned and not writable by others')
+    config = json.loads(path.read_text())
+    required = {'hostname', 'admin_user', 'management_cidrs', 'interface', 'network_file', 'bandwidth_mbit'}
+    if not required <= set(config) or set(config) - required - {'management_mode', 'wireguard'}:
+        raise SystemExit('private host configuration fields differ from the documented inputs')
+    hostname = config['hostname']
+    admin = config['admin_user']
+    interface = config['interface']
+    network_file = config['network_file']
+    bandwidth = config['bandwidth_mbit']
+    if not isinstance(hostname, str) or not re.fullmatch(r'[a-z0-9][a-z0-9.-]{0,252}', hostname):
+        raise SystemExit('invalid host name')
+    if not isinstance(admin, str) or not re.fullmatch(r'[a-z_][a-z0-9_-]*', admin):
+        raise SystemExit('invalid non-root management account')
+    if admin != os.environ.get('SUDO_USER') or int(subprocess.check_output(['id', '-u', admin])) == 0:
+        raise SystemExit('configured account differs from the verified non-root SSH login')
+    if not isinstance(interface, str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,14}', interface):
+        raise SystemExit('invalid network interface')
+    if not (Path('/sys/class/net') / interface).exists():
+        raise SystemExit('configured network interface is absent')
+    if not isinstance(network_file, str) or not re.fullmatch(r'[a-zA-Z0-9_.-]+\.network', network_file):
+        raise SystemExit('invalid network configuration filename')
+    if bandwidth is not None and (type(bandwidth) is not int or not 1 <= bandwidth <= 100000):
+        raise SystemExit('invalid provisioned bandwidth')
+    try:
+        rules = management_rules(config)
+    except (TypeError, ValueError) as error:
+        raise SystemExit(str(error)) from error
+
+    if config.get('management_mode') == 'wireguard':
+        configure_wireguard(wireguard_settings(config))
+
+    # Validated values only; no arbitrary configuration text is accepted.
+    write('/etc/diamaneos/management.nft', rules, 0o600)
+    write('/etc/ssh/sshd_config.d/00-diamaneos-admin.conf', f'AllowUsers {admin}\n')
+    write('/etc/cloud/cloud.cfg.d/99-diamaneos-hostname.cfg',
+          'preserve_hostname: true\nmanage_etc_hosts: false\n')
+    hosts = Path('/etc/hosts').read_text().splitlines()
+    hosts = [line for line in hosts if not line.split('#', 1)[0].split()[:1] == ['127.0.1.1']]
+    hosts.append(f'127.0.1.1 {hostname} {hostname.split(".", 1)[0]}')
+    write('/etc/hosts', '\n'.join(hosts) + '\n')
+    subprocess.run(['hostnamectl', 'set-hostname', hostname], check=True)
+    subprocess.run(['timedatectl', 'set-timezone', 'UTC'], check=True)
+
+    if bandwidth is not None:
+        rate_kbit = bandwidth * 1000 * 9975 // 10000
+        write(f'/etc/systemd/network/{network_file}.d/50-diamaneos.conf',
+              '[CAKE]\n' + f'Bandwidth={rate_kbit}K\n' +
+              'FlowIsolationMode=dual-dst-host\nPriorityQueueingPreset=besteffort\nSplitGSO=no\n')
+        # Apply qdisc directly now, preserving DHCP leases and active SSH sessions.
+        # networkd reads the persistent configuration on subsequent boots.
+        subprocess.run(['modprobe', 'sch_cake'], check=True)
+        subprocess.run(['tc', 'qdisc', 'replace', 'dev', interface, 'root', 'cake', 'bandwidth',
+                        f'{rate_kbit}kbit', 'besteffort', 'dual-dsthost', 'no-split-gso'], check=True)
+        subprocess.run(['networkctl', 'reload'], check=True)
+
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+// Install security updates from the configured Debian origins.
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+Unattended-Upgrade::Origins-Pattern {
+        "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+        "origin=Debian,codename=${distro_codename},label=Debian";
+};
+Unattended-Upgrade::Remove-Unused-Dependencies "true";

@@ -1,0 +1,89 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Base system for every DiamaneOS server (Debian 13). Run as root by a role's
+# apply script; safe to repeat.
+set -euo pipefail
+DEPLOY=/opt/diamaneos-infrastructure
+HERE=$DEPLOY/debian/host
+export DEBIAN_FRONTEND=noninteractive
+
+. /etc/os-release
+[ "$ID" = debian ] && [ "$VERSION_ID" = 13 ] || { echo "Debian 13 required, found $PRETTY_NAME" >&2; exit 1; }
+
+. "$HERE/lib.sh"
+
+# SUDO_USER is supplied by the successful non-root deployment login. Check it
+# before installing policy to preserve the key-authenticated management path.
+ADMIN_USER=${SUDO_USER:-}
+[[ $ADMIN_USER =~ ^[a-z_][a-z0-9_-]*$ ]] && [ "$(id -u "$ADMIN_USER")" -ne 0 ] || {
+  echo "A verified non-root sudo session is required" >&2
+  exit 1
+}
+
+apt-get update -q
+apt_install \
+  ca-certificates chrony curl iproute2 kmod nftables openssl python3 unattended-upgrades
+if python3 -c 'import json,sys; sys.exit(json.load(open("/etc/diamaneos/host.json")).get("management_mode") != "wireguard")'; then
+  apt_install wireguard-tools
+fi
+
+backup=$(mktemp -d /root/diamaneos-host.XXXXXXXX)
+chmod 0700 "$backup"
+before=()
+for path in etc/ssh/sshd_config etc/ssh/sshd_config.d etc/hosts etc/hostname etc/nftables.conf etc/systemd/system-generators; do
+  [ ! -e "/$path" ] || before+=("$path")
+done
+tar -czf "$backup/config-before.tar.gz" -C / "${before[@]}"
+{ printf 'flush ruleset\n'; nft list ruleset; } > "$backup/firewall.nft"
+
+install_tree "$HERE/files"
+rm -f /etc/ssh/sshd_config.d/50-diamaneos.conf
+python3 - <<'PY_CHECK'
+import json
+from pathlib import Path
+value = json.loads(Path('/etc/diamaneos/host.json').read_text())
+if value.get('management_mode') != 'wireguard' or value['management_cidrs']:
+    raise SystemExit('Debian bootstrap requires verified WireGuard-only management')
+PY_CHECK
+python3 "$HERE/configure-host"
+
+# This role uses ordinary key-only TCP SSH and the provider console. Disable
+# the additional local/VM SSH sockets; they also bypass the IP firewall.
+install -d -m 0755 /etc/systemd/system-generators
+ln -sfn /dev/null /etc/systemd/system-generators/systemd-ssh-generator
+for unit in sshd-unix-local.socket sshd-vsock.socket sshd-unix-export.socket; do
+  if systemctl -q is-active "$unit"; then systemctl stop "$unit"; fi
+done
+
+sysctl --quiet --system
+systemctl restart systemd-journald
+systemctl restart systemd-resolved
+systemctl restart chrony
+
+# Reload sshd only with a valid configuration, so a mistake cannot lock us out.
+sshd -t
+effective=$(sshd -T)
+for setting in 'permitrootlogin no' 'passwordauthentication no' 'kbdinteractiveauthentication no' \
+               'authenticationmethods publickey' 'hostkeyalgorithms ssh-ed25519' \
+               'kexalgorithms mlkem768x25519-sha256' 'ciphers aes256-gcm@openssh.com' \
+               'pubkeyacceptedalgorithms ssh-ed25519,sk-ssh-ed25519@openssh.com' \
+               "allowusers $ADMIN_USER"; do
+  printf '%s\n' "$effective" | grep -qxF "$setting" || {
+    echo "effective SSH policy differs from the deployment; not reloading" >&2
+    exit 1
+  }
+done
+systemctl reload ssh
+
+# A failed reconnect restores the prior firewall automatically. The deployment
+# client cancels this timer only after a fresh key-only SSH login succeeds.
+install -d -m 0700 /run/diamaneos-firewall-rollback
+install -m 0600 "$backup/firewall.nft" /run/diamaneos-firewall-rollback/rules.nft
+systemctl daemon-reload
+systemctl stop diamaneos-firewall-rollback.timer diamaneos-firewall-rollback.service 2>/dev/null || true
+systemd-run --quiet --collect --unit=diamaneos-firewall-rollback --on-active=5min \
+  /usr/sbin/nft -f /run/diamaneos-firewall-rollback/rules.nft
+nft -c -f /etc/nftables.conf
+systemctl enable nftables
+nft -f /etc/nftables.conf
+systemctl start nftables
