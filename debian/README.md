@@ -40,6 +40,17 @@ rollback. Confirm a fresh connection before cancelling that rollback.
 SSH management is restricted to WireGuard. The client must support the
 ML-KEM/X25519 hybrid exchange.
 
+Host policy configures volatile journald storage with `RuntimeMaxUse=160M` and
+`MaxRetentionSec=1day`, and disables syslog forwarding.
+The final `zz-diamaneos.conf` drop-in overrides vendor `syslog.conf` and
+`99-syslog.conf`. `host/apply` verifies the merged policy, masks the syslog
+socket, rsyslog, syslog-ng and its discovered instances. These receivers must be
+stopped with no pending jobs or remaining conventional syslog daemon processes
+before restarting journald. Conflicts with the four checked journal settings or
+unsuccessful stops fail deployment. Existing persistent logs are preserved;
+inspect their metadata and handle any removal separately.
+These controls do not set retention for application state or package-manager logs.
+
 Install the staged infrastructure root-owned at `/opt/diamaneos-infrastructure`.
 On a new host:
 

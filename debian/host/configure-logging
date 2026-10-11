@@ -1,0 +1,128 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+"""Enforce volatile service logging without removing existing log files."""
+import os
+import resource
+import subprocess
+import sys
+import tempfile
+
+
+SYSLOG_UNITS = ('syslog.socket', 'rsyslog.service', 'syslog.service', 'syslog-ng.service')
+MASK_UNITS = SYSLOG_UNITS + ('syslog-ng@.service',)
+EXPECTED = {'Storage': 'volatile', 'RuntimeMaxUse': '160M',
+            'MaxRetentionSec': '1day', 'ForwardToSyslog': 'no'}
+MAX_OUTPUT = 65536
+ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}
+
+
+def require(condition):
+    if not condition:
+        raise RuntimeError('host logging policy failed')
+
+
+def command(argv, accepted=(0,)):
+    def limits():
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_OUTPUT, MAX_OUTPUT))
+    with tempfile.TemporaryFile() as output:
+        result = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=output,
+            stderr=subprocess.DEVNULL, env=ENV, timeout=30, preexec_fn=limits)
+        output.seek(0); body = output.read(MAX_OUTPUT)
+        require(result.returncode in accepted and len(body) < MAX_OUTPUT)
+    return result.returncode, body.decode('utf-8')
+
+
+def journal_settings(text):
+    values, selected = {}, False
+    for row in text.splitlines():
+        row = row.strip()
+        if not row or row.startswith(('#', ';')):
+            continue
+        if row.startswith('['):
+            selected = row == '[Journal]'
+        elif selected and '=' in row:
+            key, value = (part.strip() for part in row.split('=', 1))
+            if key in EXPECTED:
+                values[key] = value
+    return values
+
+
+def check_journal_policy(text):
+    require(journal_settings(text) == EXPECTED)
+
+
+def unit_facts(unit):
+    _, text = command(['/usr/bin/systemctl', 'show', unit,
+                       '-p', 'LoadState', '-p', 'ActiveState', '-p', 'Job'])
+    pairs = [row.split('=', 1) for row in text.splitlines()]
+    require(len(pairs) == 3 and all(len(pair) == 2 for pair in pairs)
+            and {pair[0] for pair in pairs} == {'LoadState', 'ActiveState', 'Job'})
+    return dict(pairs)
+
+
+def quiescent(facts):
+    return facts['ActiveState'] == 'inactive' and facts['Job'] in ('', '0')
+
+
+def syslog_instances():
+    instances = set()
+    # An explicit instance unit can override a masked template. Include both
+    # loaded instances and unit files that could be activated on the next boot.
+    for action in ('list-units', 'list-unit-files'):
+        # An empty list-unit-files glob exits 1, as do real read failures. Use
+        # the Debian syslog socket as a positive anchor; never accept exit 1.
+        patterns = ['syslog-ng@*.service'] + (['syslog.socket'] if action == 'list-unit-files' else [])
+        _, text = command(['/usr/bin/systemctl', action, '--all', '--plain', '--full',
+                           '--no-legend', '--no-pager', *patterns])
+        rows = text.splitlines()
+        require(len(rows) <= 34)
+        anchor = False
+        for row in rows:
+            fields = row.split()
+            require(len(fields) >= (4 if action == 'list-units' else 2))
+            unit = fields[0]
+            if action == 'list-unit-files' and unit == 'syslog.socket':
+                anchor = True
+                continue
+            require(unit.startswith('syslog-ng@') and unit.endswith('.service')
+                    and len(unit) <= 255 and '/' not in unit)
+            if unit != 'syslog-ng@.service':
+                instances.add(unit)
+        require(action != 'list-unit-files' or anchor)
+    require(len(instances) <= 32)
+    return tuple(sorted(instances))
+
+
+def configure_logging():
+    require(os.geteuid() == 0)
+    _, text = command(['/usr/bin/systemd-analyze', 'cat-config', 'systemd/journald.conf'])
+    check_journal_policy(text)
+    instances = syslog_instances()
+    receivers, masks = SYSLOG_UNITS + instances, MASK_UNITS + instances
+    # Mask first so a socket or journal reader cannot reactivate during stops.
+    # --force replaces a syslog.service alias; an existing regular unit refuses.
+    command(['/usr/bin/systemctl', 'mask', '--force', *masks])
+    command(['/usr/bin/systemctl', 'daemon-reload'])
+    for unit in receivers:
+        facts = unit_facts(unit)
+        require(facts['LoadState'] in ('loaded', 'masked', 'not-found'))
+        if not quiescent(facts):
+            command(['/usr/bin/systemctl', 'stop', unit])
+    for unit in masks:
+        _, state = command(['/usr/bin/systemctl', 'is-enabled', unit], accepted=(0, 1))
+        require(state.strip() == 'masked')
+        if unit in receivers:
+            facts = unit_facts(unit)
+            require(facts['LoadState'] == 'masked' and quiescent(facts))
+    # Also refuse conventional syslog daemons running outside these units.
+    status, text = command(['/usr/bin/pgrep', '-x', 'rsyslogd|syslog-ng|syslogd'], accepted=(0, 1))
+    require(status == 1 and not text.strip())
+
+
+if __name__ == '__main__':
+    try:
+        configure_logging()
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        print('host logging policy failed', file=sys.stderr)
+        raise SystemExit(1)
