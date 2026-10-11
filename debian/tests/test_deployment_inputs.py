@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
 from pathlib import Path
+import runpy
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -88,6 +90,8 @@ class DeploymentInputsTest(unittest.TestCase):
                 directory = repo / 'systemd/system'
                 directory.mkdir(parents=True)
                 (directory / 'attestation.service').write_text('[Unit]\n')
+                (repo / 'static/privacy-policy.html').write_text('<!doctype html><title>DiamaneOS privacy</title>\n')
+                (repo / 'static/privacy.css').write_text('body { color: black; }\n')
             subprocess.run(['git', 'init', '-q', str(repo)], check=True)
             subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True)
             subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Fixture',
@@ -100,5 +104,50 @@ class DeploymentInputsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((destination / 'attestation/attestation.service').is_file())
         self.assertEqual(len(json.loads((destination / 'source-pins.json').read_text())), 4)
-        self.assertFalse(any(path.name in {'static', 'allowed_signers', 'security.txt',
+        self.assertEqual({path.name for path in (destination / 'attestation/static').iterdir()},
+                         {'privacy-policy.html', 'privacy.css'})
+        self.assertFalse(any(path.name in {'allowed_signers', 'security.txt',
                                           'donate-bitcoin.png'} for path in destination.rglob('*')))
+        self.assertFalse((destination / 'network/static').exists())
+        self.assertFalse((destination / 'releases/static').exists())
+        original = json.loads((destination / 'source-pins.json').read_text())['AttestationServer']
+        # A committed symbolic link is not a public-file authorization.
+        asset = clones / 'AttestationServer/static/privacy.css'
+        asset.unlink()
+        asset.symlink_to('/etc/passwd')
+        subprocess.run(['git', '-C', str(clones / 'AttestationServer'), 'add', str(asset)], check=True)
+        subprocess.run(['git', '-C', str(clones / 'AttestationServer'), '-c', 'user.name=Fixture',
+                        '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false',
+                        'commit', '-qm', 'Unsafe fixture'], check=True)
+        unsafe = subprocess.check_output(['git', '-C', str(clones / 'AttestationServer'),
+                                          'rev-parse', 'HEAD'], text=True).strip()
+        refused = subprocess.run([sys.executable, str(ROOT / 'debian/stage-web-sources'),
+                                  str(clones), str(self.base / 'refused')],
+                                 capture_output=True, text=True, timeout=15)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertFalse((self.base / 'refused/source-pins.json').exists())
+        # Move HEAD after cleanliness succeeds, without changing its index or
+        # working files. Only an exporter bound to the checked commit is safe.
+        subprocess.run(['git', '-C', str(clones / 'AttestationServer'), 'reset',
+                        '--hard', original], check=True, stdout=subprocess.DEVNULL)
+        moving = self.base / 'moving'
+        native_run = subprocess.run
+        changed = []
+
+        def move_head(argv, **kwargs):
+            result = native_run(argv, **kwargs)
+            if (argv[:3] == ['git', '-C', str(clones / 'AttestationServer')]
+                    and argv[3] == 'diff' and not changed):
+                native_run(['git', '-C', str(clones / 'AttestationServer'),
+                            'update-ref', 'HEAD', unsafe], check=True)
+                changed.append(True)
+            return result
+
+        with patch.object(sys, 'argv', ['stage-web-sources', str(clones), str(moving)]), \
+                patch.object(subprocess, 'run', side_effect=move_head):
+            runpy.run_path(str(ROOT / 'debian/stage-web-sources'), run_name='__main__')
+        self.assertEqual(changed, [True])
+        self.assertEqual(json.loads((moving / 'source-pins.json').read_text())['AttestationServer'], original)
+        exported = moving / 'attestation/static/privacy.css'
+        self.assertFalse(exported.is_symlink())
+        self.assertEqual(exported.read_text(), 'body { color: black; }\n')
