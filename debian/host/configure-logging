@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Enforce volatile service logging without removing existing log files."""
 import os
+from pathlib import Path
+import re
 import resource
+import stat
 import subprocess
 import sys
 import tempfile
@@ -34,22 +37,111 @@ def command(argv, accepted=(0,)):
 
 
 def journal_settings(text):
-    values, selected = {}, False
-    for row in text.splitlines():
-        row = row.strip()
+    """Parse one verified file, using only unquoted single-line scalar settings."""
+    require(type(text) is str and text.isascii() and len(text) < MAX_OUTPUT
+            and all(ord(char) >= 32 or char in '\t\r\n' for char in text))
+    lines = text.split('\n')
+    require(len(lines) <= 4096)
+    values, section = {}, None
+    for raw in lines:
+        require(len(raw) <= 4096)
+        if raw.endswith('\r'):
+            raw = raw[:-1]
+        require('\r' not in raw)
+        # A source comment could impersonate cat-config's file banner. Refuse
+        # it, rather than letting concatenated output choose section lifetime.
+        require(not raw.startswith('# /'))
+        row = raw.strip(' \t')
         if not row or row.startswith(('#', ';')):
             continue
+        require('\\' not in row)
         if row.startswith('['):
-            selected = row == '[Journal]'
-        elif selected and '=' in row:
-            key, value = (part.strip() for part in row.split('=', 1))
-            if key in EXPECTED:
+            require(re.fullmatch(r'\[[A-Za-z][A-Za-z0-9_.-]*\]', row))
+            section = row[1:-1]
+        else:
+            require(section is not None and '=' in row)
+            key, value = (part.strip(' \t') for part in row.split('=', 1))
+            require(re.fullmatch(r'[A-Za-z][A-Za-z0-9]*', key)
+                    and re.fullmatch(r'[A-Za-z0-9_.:/@%+-]*', value))
+            if section == 'Journal' and key in EXPECTED:
                 values[key] = value
     return values
 
 
 def check_journal_policy(text):
     require(journal_settings(text) == EXPECTED)
+
+
+def journal_files(root, owner):
+    prefixes = ('etc/systemd', 'run/systemd', 'usr/local/lib/systemd', 'usr/lib/systemd')
+    main, dropins = None, {}
+    for prefix in prefixes:
+        directory = root / prefix
+        for candidate in (directory / 'journald.conf', directory / 'journald.conf.d'):
+            for parent in (root, *candidate.relative_to(root).parents):
+                path = parent if parent == root else root / parent
+                if not path.exists() and not path.is_symlink():
+                    continue
+                info = path.lstat()
+                require(stat.S_ISDIR(info.st_mode) and info.st_uid == owner and not info.st_mode & 0o022)
+        path = directory / 'journald.conf'
+        if path.exists() or path.is_symlink():
+            require(not path.is_symlink())
+            if main is None: main = path
+        directory = directory / 'journald.conf.d'
+        if directory.exists() or directory.is_symlink():
+            info = directory.lstat()
+            require(stat.S_ISDIR(info.st_mode) and info.st_uid == owner and not info.st_mode & 0o022)
+            for count, path in enumerate(directory.iterdir(), 1):
+                require(count <= 128)
+                if not path.name.endswith('.conf'): continue
+                require(re.fullmatch(r'[A-Za-z0-9_.@:+-]+[.]conf', path.name) and not path.is_symlink())
+                dropins.setdefault(path.name, path)
+                require(len(dropins) <= 128)
+    paths = ([main] if main is not None else []) + [dropins[name] for name in sorted(dropins)]
+    require(paths and len(paths) <= 128)
+    return paths
+
+
+def journal_file(path, owner):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == owner and info.st_nlink == 1
+                and not info.st_mode & 0o022 and info.st_size < MAX_OUTPUT)
+        body = stream.read(MAX_OUTPUT)
+        fields = ('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
+        identity = tuple(getattr(info, field) for field in fields)
+        require(len(body) == info.st_size and tuple(getattr(path.lstat(), field) for field in fields) == identity)
+    return identity, body.decode('utf-8')
+
+
+def check_journal_configuration(root=Path('/'), owner=0):
+    """Match native output to independently verified files. Never trust banners."""
+    require(root.is_absolute() and not root.is_symlink())
+    paths = journal_files(root, owner)
+    snapshots = {path: journal_file(path, owner) for path in paths}
+    require(sum(len(body.encode()) for _, body in snapshots.values()) < MAX_OUTPUT)
+    values = {}
+    for _, body in snapshots.values(): values.update(journal_settings(body))
+    argv = ['/usr/bin/systemd-analyze']
+    if root != Path('/'): argv.append('--root=' + str(root))
+    _, text = command([*argv, 'cat-config', 'systemd/journald.conf'])
+    sections, current = {}, None
+    for row in text.split('\n'):
+        if row.startswith('# /'):
+            current = Path(row[2:])
+            require(current in snapshots and current not in sections)
+            sections[current] = []
+        elif current is not None:
+            sections[current].append(row)
+        else:
+            require(not row)
+    require(list(sections) == paths)
+    for path in paths:
+        require('\n'.join(sections[path]).rstrip('\n') == snapshots[path][1].rstrip('\n'))
+        require(journal_file(path, owner) == snapshots[path])
+    require(journal_files(root, owner) == paths and values == EXPECTED)
 
 
 def unit_facts(unit):
@@ -96,8 +188,7 @@ def syslog_instances():
 
 def configure_logging():
     require(os.geteuid() == 0)
-    _, text = command(['/usr/bin/systemd-analyze', 'cat-config', 'systemd/journald.conf'])
-    check_journal_policy(text)
+    check_journal_configuration()
     instances = syslog_instances()
     receivers, masks = SYSLOG_UNITS + instances, MASK_UNITS + instances
     # Mask first so a socket or journal reader cannot reactivate during stops.
