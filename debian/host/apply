@@ -37,6 +37,7 @@ tar -czf "$backup/config-before.tar.gz" -C / "${before[@]}"
 { printf 'flush ruleset\n'; nft list ruleset; } > "$backup/firewall.nft"
 
 install_tree "$HERE/files"
+python3 "$HERE/configure-logging"
 rm -f /etc/ssh/sshd_config.d/50-diamaneos.conf
 python3 - <<'PY_CHECK'
 import json
