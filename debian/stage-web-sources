@@ -17,19 +17,28 @@ sources = [
         'etc/systemd/system/session-ticket-keys-rotate.timer']),
     ('network-services', 'network', ['nginx']),
     ('releases.diamaneos.de', 'releases', ['nginx']),
-    ('AttestationServer', 'attestation', ['nginx', 'systemd/system/attestation.service']),
+    ('AttestationServer', 'attestation', ['nginx', 'systemd/system/attestation.service',
+        'static/privacy-policy.html', 'static/privacy.css']),
 ]
 pins = {}
 for repository, prefix, paths in sources:
     root = parent / repository
-    subprocess.run(['git', '-C', str(root), 'diff', '--exit-code', 'HEAD', '--', *paths],
+    commit = subprocess.check_output(['git', '-C', str(root), 'rev-parse', '--verify',
+                                      'HEAD^{commit}'], text=True).strip()
+    if repository == 'AttestationServer':
+        for name in ('static/privacy-policy.html', 'static/privacy.css'):
+            entry = subprocess.check_output(['git', '-C', str(root), 'ls-tree', commit,
+                                             '--', name], text=True).split()
+            if len(entry) != 4 or entry[0] != '100644' or entry[1] != 'blob' or entry[3] != name:
+                raise SystemExit('Public privacy assets must be committed regular files.')
+    subprocess.run(['git', '-C', str(root), 'diff', '--exit-code', commit, '--', *paths],
                    check=True, stdout=subprocess.DEVNULL)
-    pins[repository] = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+    pins[repository] = commit
     archive = subprocess.check_output(['git', '-C', str(root), 'archive', '--format=tar',
-                                     '--prefix=' + prefix + '/', 'HEAD', *paths])
+                                     '--prefix=' + prefix + '/', commit, *paths])
     subprocess.run(['tar', '-xf', '-', '-C', str(destination)], input=archive, check=True)
 # The assembly adapter expects the portable unit at this explicit path.
 (destination / 'attestation/attestation.service').write_bytes(
     (destination / 'attestation/systemd/system/attestation.service').read_bytes())
 (destination / 'source-pins.json').write_text(json.dumps(pins, indent=2) + '\n')
-print('Committed configuration exported.')
+print('Committed configuration and public privacy assets exported.')
