@@ -194,7 +194,7 @@ class VerifiedConfigurationTest(unittest.TestCase):
             path.unlink()
             if kind=='symlink': path.symlink_to(self.root/'outside')
             elif kind=='hardlink':
-                outside=self.root/'outside';outside.write_text(POLICY);path.hardlink_to(outside)
+                outside=self.root/'outside';outside.write_text(POLICY);os.link(outside,path)
             elif kind=='writable':path.write_text(POLICY);path.chmod(0o666)
             else:path.mkdir()
             with self.subTest(kind=kind), patch.object(logging, 'command', side_effect=lambda *a,**kw:self.native()), self.assertRaises((OSError,RuntimeError)):
