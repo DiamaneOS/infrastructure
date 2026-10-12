@@ -48,9 +48,6 @@ def journal_settings(text):
         if raw.endswith('\r'):
             raw = raw[:-1]
         require('\r' not in raw)
-        # A source comment could impersonate cat-config's file banner. Refuse
-        # it, rather than letting concatenated output choose section lifetime.
-        require(not raw.startswith('# /'))
         row = raw.strip(' \t')
         if not row or row.startswith(('#', ';')):
             continue
@@ -127,19 +124,13 @@ def check_journal_configuration(root=Path('/'), owner=0):
     argv = ['/usr/bin/systemd-analyze']
     if root != Path('/'): argv.append('--root=' + str(root))
     _, text = command([*argv, 'cat-config', 'systemd/journald.conf'])
-    sections, current = {}, None
-    for row in text.split('\n'):
-        if row.startswith('# /'):
-            current = Path(row[2:])
-            require(current in snapshots and current not in sections)
-            sections[current] = []
-        elif current is not None:
-            sections[current].append(row)
-        else:
-            require(not row)
-    require(list(sections) == paths)
+    # Native cat-config inserts one separator between files and emits each
+    # source line with a newline. Compare that rendering; comments resembling
+    # file banners never select files or change section lifetime.
+    expected = '\n'.join('# ' + str(path) + '\n' + ''.join(
+        line + '\n' for line in snapshots[path][1].splitlines()) for path in paths)
+    require(text == expected)
     for path in paths:
-        require('\n'.join(sections[path]).rstrip('\n') == snapshots[path][1].rstrip('\n'))
         require(journal_file(path, owner) == snapshots[path])
     require(journal_files(root, owner) == paths and values == EXPECTED)
 
