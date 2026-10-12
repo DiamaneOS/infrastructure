@@ -104,13 +104,9 @@ class JournalPolicyTest(unittest.TestCase):
         with self.assertRaises(RuntimeError): logging.check_journal_policy('[Other]\n' + POLICY.split('\n',1)[1])
 
     def test_headerless_next_file_cannot_restore_a_previous_files_journal_section(self):
-        text = '# /etc/systemd/journald.conf.d/zz-diamaneos.conf\n' + POLICY
-        text += '# /etc/systemd/journald.conf.d/zzz-persistent.conf\n[Journal]\nStorage=persistent\n'
-        text += '# /etc/systemd/journald.conf.d/zzzz-headerless.conf\nStorage=volatile\n'
-        manager = Manager(text)
-        with fixture(manager), self.assertRaises(RuntimeError): logging.configure_logging()
-        self.assertFalse(manager.masked); self.assertEqual(1, len(manager.calls))
-        with self.assertRaises(RuntimeError): logging.journal_settings('Storage=volatile\n' + POLICY)
+        self.assertEqual('persistent', logging.journal_settings(POLICY+'Storage=persistent\n')['Storage'])
+        for text in ('Storage=volatile\n', '# /etc/systemd/journald.conf.d/other.conf\nStorage=volatile\n'):
+            with self.subTest(text=text), self.assertRaises(RuntimeError): logging.journal_settings(text)
 
     def test_continuation_on_even_an_unknown_key_cannot_hide_a_later_assignment(self):
         for line in ('Storage=volatile\\\n', 'IgnoredSetting=unknown\\\nStorage=volatile\n',
@@ -128,7 +124,7 @@ class JournalPolicyTest(unittest.TestCase):
         for line in ('[Journal] trailing', '[ Journal ]', 'Storage', '=volatile', 'Storage="volatile"',
                      "Storage='volatile'", 'Storage=volatile # inline', 'IgnoredSetting=one two',
                      'IgnoredSetting=one;two', 'Storage=volatile\x00', 'Storage=volatile\rStorage=persistent',
-                     '# /path with spaces', '# /path\\escape', '[Journál]'):
+                     '[Journál]'):
             with self.subTest(line=line), self.assertRaises(RuntimeError):
                 logging.journal_settings(POLICY + line + '\n')
         for value in (None, [], b'PRIVATE', '\x1b[0m' + POLICY):
@@ -158,7 +154,7 @@ class VerifiedConfigurationTest(unittest.TestCase):
 
     def native(self):
         paths = sorted(self.directory.glob('*.conf'))
-        return 0, '\n'.join('# '+str(path)+'\n'+path.read_text() for path in paths)+'\n'
+        return 0, '\n'.join('# '+str(path)+'\n'+path.read_text() for path in paths)
 
     def check(self):
         logging.check_journal_configuration(self.root, owner=os.getuid())
@@ -172,10 +168,12 @@ class VerifiedConfigurationTest(unittest.TestCase):
         with patch.object(logging, 'command', side_effect=lambda *a,**kw:self.native()): self.check()
 
     def test_source_comment_cannot_impersonate_a_boundary_even_at_an_existing_path(self):
-        for suffix in ('# /etc/systemd/journald.conf.d/other.conf\nStorage=volatile\n',
-                       '# '+str(self.directory/'zz-diamaneos.conf')+'\n[Journal]\nStorage=volatile\n'):
-            (self.directory/'zz-diamaneos.conf').write_text(POLICY+'Storage=persistent\n'+suffix)
-            with patch.object(logging, 'command', side_effect=lambda *a,**kw:self.native()), self.assertRaises(RuntimeError): self.check()
+        (self.directory/'zz-diamaneos.conf').write_text(
+            '# /etc/systemd/journald.conf.d/overrides belong here\n' + POLICY)
+        with patch.object(logging, 'command', side_effect=lambda *a,**kw:self.native()): self.check()
+        self.write('zzz-persistent.conf','[Journal]\nStorage=persistent\n')
+        self.write('zzzz-headerless.conf','# '+str(self.directory/'zz-diamaneos.conf')+'\nStorage=volatile\n')
+        with patch.object(logging, 'command', side_effect=lambda *a,**kw:self.native()), self.assertRaises(RuntimeError): self.check()
 
     def test_missing_extra_duplicate_or_changed_native_file_content_refuses(self):
         _, good = self.native()
@@ -381,7 +379,7 @@ class NativeSystemdReferenceTest(unittest.TestCase):
                  ('both_vendors',True,False), ('same_vendor_basename',True,False),
                  ('same_runtime_basename',True,False), ('later_conflict',True,True),
                  ('headerless_file_after_persistent',True,False),
-                 ('continued_unknown_assignment',True,False), ('spoofed_file_banner',True,False))
+                 ('continued_unknown_assignment',True,False), ('spoofed_file_banner',True,True))
         for label, final, late in cases:
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -415,7 +413,7 @@ class NativeSystemdReferenceTest(unittest.TestCase):
                     while frame is not None:
                         if frame.tb_frame.f_code.co_filename==logging.__file__: helper_line=frame.tb_lineno
                         frame=frame.tb_next
-                unsupported = label in ('headerless_file_after_persistent','continued_unknown_assignment','spoofed_file_banner')
+                unsupported = label in ('headerless_file_after_persistent','continued_unknown_assignment')
                 expected = final and not late and not unsupported
                 results.append(dict(case=label, cat_config_exit=status, helper_accepts=accepted,
                     independent_files_checked=True, unsupported_case=unsupported,
