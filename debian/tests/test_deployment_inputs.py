@@ -72,6 +72,18 @@ class DeploymentInputsTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(destination.exists())
 
+    def test_runtime_dropins_have_declared_modes_independent_of_caller_umask(self):
+        runtime = (ROOT / 'debian/install-web-runtime').read_text()
+        expected = {
+            'nginx-clock-readiness.conf': b'[Unit]\nWants=diamaneos-clock.service\nAfter=diamaneos-clock.service\n',
+            'egress-network-admin.conf': b'[Service]\nCapabilityBoundingSet=CAP_NET_ADMIN\n',
+        }
+        for name, body in expected.items():
+            self.assertEqual(body, (ROOT / 'debian' / name).read_bytes())
+            self.assertIn('install -o root -g root -m 0644 "$here/' + name + '"', runtime)
+        self.assertIn('chmod 0644 "/etc/systemd/system/$mount_unit"', runtime)
+        self.assertIn('chmod 0644 /etc/diamaneos/web-role', runtime)
+
     def test_committed_source_staging_excludes_website_and_identity_assets(self):
         clones = self.base / 'clones'
         for name in ['infrastructure', 'network-services', 'releases.diamaneos.de', 'AttestationServer']:
