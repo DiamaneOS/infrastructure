@@ -8,6 +8,42 @@ role=${1:?usage: install-web-runtime primary|mirror|attestation}
 case $role in primary|mirror|attestation) ;; *) exit 2 ;; esac
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 source "$here/host/lib.sh"
+# Fixed generated destinations must never resolve through an administrative mask.
+generated_file() {
+    python3 - "$1" "$2" "$3" <<'PY'
+import os,stat,sys
+path,source,value=sys.argv[1:]
+if source=='--role':
+    if value not in {'primary','mirror','attestation'}: raise SystemExit(2)
+    data=(value+'\n').encode()
+else:
+    if not value.isdecimal(): raise SystemExit(2)
+    handle=os.open(source,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    try:
+        info=os.fstat(handle)
+        if not (stat.S_ISREG(info.st_mode) and info.st_uid==0 and not info.st_mode&0o022
+                and 0<info.st_size<=8192): raise SystemExit(2)
+        data=os.read(handle,8193)
+        if len(data)!=info.st_size: raise SystemExit(2)
+    finally: os.close(handle)
+    data=data.replace(b'gid=tls',('gid='+value).encode())
+try:
+    fd=os.open(path,os.O_WRONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+except FileNotFoundError:
+    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+try:
+    info=os.fstat(fd)
+    if not (stat.S_ISREG(info.st_mode) and info.st_uid==info.st_gid==0
+            and info.st_nlink==1 and not info.st_mode&0o022):
+        raise SystemExit(2)
+    os.ftruncate(fd,0)
+    with os.fdopen(os.dup(fd),'wb') as out:
+        out.write(data);out.flush();os.fsync(out.fileno())
+    os.fchmod(fd,0o644)
+finally:
+    os.close(fd)
+PY
+}
 apt_install acl rsync certbot
 getent group diamaneos-tls >/dev/null || groupadd --system diamaneos-tls
 getent group tls >/dev/null || groupadd --system tls
@@ -24,12 +60,10 @@ done
 install -d -m 0755 /etc/systemd/system/session-ticket-keys-create.service.d
 install -m 0644 "$here/session-ticket-keys-create.conf" /etc/systemd/system/session-ticket-keys-create.service.d/50-debian.conf
 mount_unit='etc-tls-session\x2dticket\x2dkeys.mount'
-sed "s/gid=tls/gid=$(getent group tls | cut -d: -f3)/" "$here/$mount_unit" > "/etc/systemd/system/$mount_unit"
-chmod 0644 "/etc/systemd/system/$mount_unit"
+generated_file "/etc/systemd/system/$mount_unit" "$here/$mount_unit" "$(getent group tls | cut -d: -f3)"
 install -m 0755 "$here/nginx-cert-access" /usr/local/sbin/diamaneos-nginx-cert-access
 install -D -m 0755 "$here/reload-nginx" /etc/letsencrypt/renewal-hooks/deploy/reload-nginx
-printf '%s\n' "$role" > /etc/diamaneos/web-role
-chmod 0644 /etc/diamaneos/web-role
+generated_file /etc/diamaneos/web-role --role "$role"
 if test "$role" = primary; then
     system_user diamaneos-clock
     install -m 0755 "$here/clock-readiness" /usr/local/bin/diamaneos-clock-readiness

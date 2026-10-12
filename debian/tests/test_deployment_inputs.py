@@ -81,8 +81,10 @@ class DeploymentInputsTest(unittest.TestCase):
         for name, body in expected.items():
             self.assertEqual(body, (ROOT / 'debian' / name).read_bytes())
             self.assertIn('install -o root -g root -m 0644 "$here/' + name + '"', runtime)
-        self.assertIn('chmod 0644 "/etc/systemd/system/$mount_unit"', runtime)
-        self.assertIn('chmod 0644 /etc/diamaneos/web-role', runtime)
+        self.assertIn('generated_file "/etc/systemd/system/$mount_unit"', runtime)
+        self.assertIn('generated_file /etc/diamaneos/web-role --role "$role"', runtime)
+        self.assertIn('os.O_WRONLY|os.O_NOFOLLOW|os.O_NONBLOCK', runtime)
+        self.assertIn('info.st_nlink==1', runtime)
 
     def test_committed_source_staging_excludes_website_and_identity_assets(self):
         clones = self.base / 'clones'
