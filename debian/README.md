@@ -68,6 +68,10 @@ rollback.
 Validate and reload nginx through its systemd unit, which runs as the serving
 user. A bare root `nginx -t` can leave incorrectly owned PID/cache files.
 
+The primary configuration accepts an optional local `website.conf` include.
+Website content, its certificate and contact handler are supplied by the
+website deployment. This repository does not stage them.
+
 Primary downloads use `releases.diamaneos.de` and `apps.diamaneos.de`. The mirror
 uses `releases-na.diamaneos.de` and `apps-na.diamaneos.de`. Each host obtains its
 own ACME certificates and answers its own challenges. Use webroot renewal once

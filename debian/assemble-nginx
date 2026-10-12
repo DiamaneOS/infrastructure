@@ -22,6 +22,8 @@ for root in roots:
             files[path.name] = path.read_text()
 if role == 'primary':
     files['nginx.conf'] = (source / 'network/nginx/nginx.conf').read_text()
+    files['nginx.conf'] = files['nginx.conf'].replace(
+        'include releases[.]conf;', 'include releases[.]conf;\n    include website[.]conf;')
 if role == 'mirror':
     # Reuse the artifact handlers on fixed regional names. Each host answers
     # its own ACME challenges. Client fallback does not change shared DNS.

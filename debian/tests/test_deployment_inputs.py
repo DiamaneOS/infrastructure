@@ -56,6 +56,11 @@ class DeploymentInputsTest(unittest.TestCase):
                 if role == 'mirror':
                     self.assertIn('server_name releases-na.diamaneos.de apps-na.diamaneos.de;',
                                   (destination / 'releases.conf').read_text())
+                if role == 'primary':
+                    self.assertIn('include website[.]conf;', (destination / 'nginx.conf').read_text())
+                    self.assertFalse((destination / 'website.conf').exists())
+                else:
+                    self.assertNotIn('include website[.]conf;', (destination / 'nginx.conf').read_text())
 
     def test_missing_or_external_includes_reject_without_output(self):
         entry = self.source / 'attestation/nginx/nginx.conf'
