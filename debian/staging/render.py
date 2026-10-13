@@ -117,6 +117,8 @@ server {
     location = /contact/submit { return 503; }
     location = /robots.txt { default_type text/plain; return 200 "User-agent: *\\nDisallow: /\\n"; }
     location = /healthz { default_type text/plain; return 200 "ready\\n"; }
+    # The short link the setup wizard shows, as on the production website.
+    location ~* ^/ubl/?$ { return 301 /faq/#bootloader-locking-setup; }
     location ~ (^|/)\\. { return 404; }
     location ~* \\.(?:py|conf|toml|json|pem|key|cred|sqlite|db|sh)$ { return 404; }
     location / {
