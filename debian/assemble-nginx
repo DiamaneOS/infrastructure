@@ -7,8 +7,12 @@ import glob
 import re
 import sys
 
-if len(sys.argv) != 4:
-    raise SystemExit('usage: assemble-nginx primary|mirror|attestation SOURCE_ROOT OUTPUT')
+# nginx refuses to start without a certificate, so the first status certificate
+# is requested while only the status page's HTTP server is live.
+pending = sys.argv[4:] == ['--before-status-certificate']
+if len(sys.argv) != 4 + pending or (pending and sys.argv[1] != 'mirror'):
+    raise SystemExit('usage: assemble-nginx primary|mirror|attestation SOURCE_ROOT OUTPUT'
+                     ' [--before-status-certificate]')
 role, source, output = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
 if role not in {'primary', 'mirror', 'attestation'}:
     raise SystemExit('invalid role')
@@ -60,6 +64,38 @@ for name, text in files.items():
     before, separator, after = text.partition('\nstream {')
     before = re.sub(r'(\n\s*server_name [^;]+;)', r'\1\n        include ads.conf;', before)
     files[name] = before + separator + after
+if role == 'mirror':
+    # The unlisted status page serves only its page and robots.txt, without ads.conf.
+    files['mirror.conf'] += '''server {
+    listen 80;
+    listen [::]:80;
+    server_name status.diamaneos.de;
+    add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
+    location /.well-known/acme-challenge/ { root /var/lib/letsencrypt/webroot; }
+    location / { return 301 https://$host$request_uri; }
+}
+'''
+    if not pending:
+        files['mirror.conf'] += '''server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name status.diamaneos.de;
+    ssl_certificate /etc/letsencrypt/live/diamaneos-status/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/diamaneos-status/privkey.pem;
+    root /var/lib/diamaneos-status-page;
+    disable_symlinks on from=$document_root;
+    # Locations add no headers, so these apply to every response.
+    add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
+    add_header Cache-Control "no-cache" always;
+    add_header Content-Security-Policy "default-src 'none'; style-src 'sha256-7yC9xC/iI2tfRx8ChmbZOZ2Q+6s4bRpnah8Zp3SnLgc='; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    location = / { try_files /index.html =404; }
+    location = /robots.txt { default_type text/plain; return 200 "User-agent: *\\nDisallow: /\\n"; }
+    location / { return 404; }
+}
+'''
 files['ads.conf'] = '''location = /ads.txt {
     default_type text/plain;
     return 200 "placeholder.example.com, placeholder, DIRECT, placeholder\\n";

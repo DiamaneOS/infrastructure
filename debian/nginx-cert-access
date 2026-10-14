@@ -7,7 +7,7 @@ getent group diamaneos-tls >/dev/null
 for directory in /etc/letsencrypt /etc/letsencrypt/live /etc/letsencrypt/archive; do
     test ! -d "$directory" || setfacl -m g:diamaneos-tls:--x "$directory"
 done
-for lineage in diamaneos-primary diamaneos-artifacts diamaneos-supl diamaneos-mirror diamaneos-mirror-artifacts diamaneos-attestation diamaneos-website diamaneos-staging; do
+for lineage in diamaneos-primary diamaneos-artifacts diamaneos-supl diamaneos-mirror diamaneos-mirror-artifacts diamaneos-status diamaneos-attestation diamaneos-website diamaneos-staging; do
     test -d "/etc/letsencrypt/live/$lineage" || continue
     for directory in "/etc/letsencrypt/live/$lineage" "/etc/letsencrypt/archive/$lineage"; do
         setfacl -m g:diamaneos-tls:--x "$directory"

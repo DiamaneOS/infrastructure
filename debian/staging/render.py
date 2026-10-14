@@ -154,6 +154,9 @@ def render(role, source, output, website_headers=None):
                         str(source), str(assembled)], check=True, timeout=30)
         files = {path.name: read(path) for path in assembled.iterdir()}
     inputs = {name: hashlib.sha256(text.encode()).hexdigest() for name, text in files.items()}
+    if role == 'web':
+        # Replaced below. The production status page has no staging counterpart.
+        del files['mirror.conf']
     files = {FILES.get(name, name): rewrite(text) if name.endswith('.conf') else text
              for name, text in files.items()}
     if role == 'web':
