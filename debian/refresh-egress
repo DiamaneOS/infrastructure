@@ -110,9 +110,11 @@ if role == 'attestation':
             proto = 'ip' if version == 4 else 'ip6'
             lines += [f'  meta skuid {app} {proto} daddr @smtp{version} tcp dport {port} accept']
 if 'monitor' in destinations:
+    # The mirror also checks the SUPL relay, a TLS stream. Its monitor set holds only project hosts.
+    ports = '{ 443, 7275 }' if role == 'mirror' else '443'
     for version in (4, 6):
         proto = 'ip' if version == 4 else 'ip6'
-        lines += [f'  meta skuid {monitor} {proto} daddr @monitor{version} tcp dport 443 accept']
+        lines += [f'  meta skuid {monitor} {proto} daddr @monitor{version} tcp dport {ports} accept']
 for user in users:
     lines += [f'  meta skuid {user} reject']
 if clock is not None:
