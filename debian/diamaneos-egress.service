@@ -8,6 +8,7 @@ Before=nginx.service attestation.service
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/diamaneos-refresh-egress
+StateDirectory=diamaneos-egress
 TimeoutStartSec=60s
 NoNewPrivileges=yes
 CapabilityBoundingSet=CAP_NET_ADMIN
