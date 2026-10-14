@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
 from pathlib import Path
+import re
 import runpy
 import subprocess
 import sys
@@ -36,9 +37,9 @@ class DeploymentInputsTest(unittest.TestCase):
             ' include service-state.conf;\n}\n')
         (self.source / 'attestation/nginx/service-state.conf').write_text('return 503;\n')
 
-    def assemble(self, role, destination):
+    def assemble(self, role, destination, *options):
         return subprocess.run([sys.executable, str(ROOT / 'debian/assemble-nginx'),
-                               role, str(self.source), str(destination)],
+                               role, str(self.source), str(destination), *options],
                               capture_output=True, text=True, timeout=10)
 
     def test_only_active_vhost_dependencies_are_copied(self):
@@ -61,6 +62,35 @@ class DeploymentInputsTest(unittest.TestCase):
                     self.assertFalse((destination / 'website.conf').exists())
                 else:
                     self.assertNotIn('include website[.]conf;', (destination / 'nginx.conf').read_text())
+
+    def test_mirror_status_page_is_unlisted_and_staged_for_its_first_certificate(self):
+        def servers(destination, *options):
+            self.assertEqual(self.assemble('mirror', destination, *options).returncode, 0)
+            text = (destination / 'mirror.conf').read_text()
+            return [block for block in text.split('server {') if 'status.diamaneos.de' in block]
+        http, https = servers(self.base / 'full')
+        self.assertEqual([http], servers(self.base / 'pending', '--before-status-certificate'))
+        self.assertIn('location /.well-known/acme-challenge/ { root /var/lib/letsencrypt/webroot; }', http)
+        self.assertIn('location / { return 301 https://$host$request_uri; }', http)
+        self.assertIn('ssl_certificate /etc/letsencrypt/live/diamaneos-status/fullchain.pem;', https)
+        self.assertIn('root /var/lib/diamaneos-status-page;', https)
+        self.assertIn('disable_symlinks on from=$document_root;', https)
+        # Only the page and robots.txt. A location with add_header would drop the server's headers.
+        self.assertEqual(['location = / { try_files /index.html =404; }',
+                          'location = /robots.txt { default_type text/plain; return 200 "User-agent: *\\nDisallow: /\\n"; }',
+                          'location / { return 404; }'], re.findall(r'location [^\n]+', https))
+        self.assertNotIn('include', http + https)
+        headers = dict(re.findall(r'add_header (\S+) "([^"]+)" always;', https))
+        # private-scripts monitoring/status_page.py STYLE_HASH is the page's only style.
+        self.assertEqual("default-src 'none'; style-src 'sha256-7yC9xC/iI2tfRx8ChmbZOZ2Q+6s4bRpnah8Zp3SnLgc='; "
+                         "frame-ancestors 'none'; base-uri 'none'; form-action 'none'", headers.pop('Content-Security-Policy'))
+        self.assertEqual({'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'no-cache',
+                          'Strict-Transport-Security': 'max-age=31536000', 'X-Content-Type-Options': 'nosniff',
+                          'Referrer-Policy': 'no-referrer'}, headers)
+        self.assertIn(' diamaneos-status ', (ROOT / 'debian/nginx-cert-access').read_text())
+        refused = self.assemble('primary', self.base / 'refused', '--before-status-certificate')
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertFalse((self.base / 'refused').exists())
 
     def test_missing_or_external_includes_reject_without_output(self):
         entry = self.source / 'attestation/nginx/nginx.conf'

@@ -22,7 +22,7 @@ http {
     server {
         listen 80;
         listen [::]:80;
-        server_name mirror.diamaneos.de releases-na.diamaneos.de apps-na.diamaneos.de;
+        server_name mirror.diamaneos.de releases-na.diamaneos.de apps-na.diamaneos.de status.diamaneos.de;
         location /.well-known/acme-challenge/ { root /var/lib/letsencrypt/webroot; }
         location / { return 404; }
     }

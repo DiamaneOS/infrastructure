@@ -9,7 +9,7 @@ services. They do not replace the upstream HTTP, SUPL or attestation protocols.
 | Role | Services |
 | --- | --- |
 | `primary` | Network relays, connectivity checks, HTTPS time and artifact serving |
-| `mirror` | Artifact serving |
+| `mirror` | Artifact serving and the status page |
 | `attestation` | Attestation backend and its HTTPS frontend |
 
 Authoritative DNS is external. Website content and a hosted geocoder are outside
@@ -76,6 +76,13 @@ Primary downloads use `releases.diamaneos.de` and `apps.diamaneos.de`. The mirro
 uses `releases-na.diamaneos.de` and `apps-na.diamaneos.de`. Each host obtains its
 own ACME certificates and answers its own challenges. Use webroot renewal once
 nginx occupies the HTTP port.
+
+The mirror also serves the unlisted `status.diamaneos.de` from
+`/var/lib/diamaneos-status-page`. A separate monitoring deployment writes that
+page. This repository does not stage it. Before the `diamaneos-status`
+certificate exists, assemble with `--before-status-certificate` so only its
+HTTP server is live. Request the certificate, then assemble and install again
+without the option.
 
 ## Attestation and publication
 
