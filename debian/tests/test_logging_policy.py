@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parents[1]
 loader = importlib.machinery.SourceFileLoader('configure_logging', str(HERE / 'host/configure-logging'))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 logging = importlib.util.module_from_spec(spec); loader.exec_module(logging)
-POLICY = '[Journal]\nStorage=volatile\nRuntimeMaxUse=160M\nMaxRetentionSec=1day\nForwardToSyslog=no\n'
+POLICY = '[Journal]\nStorage=volatile\nRuntimeMaxUse=160M\nMaxRetentionSec=1day\nMaxFileSec=1h\nForwardToSyslog=no\n'
 RECEIVERS = ('syslog.socket', 'rsyslog.service', 'syslog.service', 'syslog-ng.service')
 
 
@@ -79,23 +79,23 @@ def fixture(manager):
 
 
 class JournalPolicyTest(unittest.TestCase):
-    def test_final_source_dropin_reasserts_all_four_privacy_controls(self):
+    def test_final_source_dropin_reasserts_all_five_privacy_controls(self):
         path = HERE / 'host/files/etc/systemd/journald.conf.d/zz-diamaneos.conf'
         config = configparser.ConfigParser(); config.read(path)
         self.assertEqual({'storage':'volatile', 'runtimemaxuse':'160M', 'maxretentionsec':'1day',
-                          'forwardtosyslog':'no'}, dict(config['Journal']))
+                          'maxfilesec':'1h', 'forwardtosyslog':'no'}, dict(config['Journal']))
         logging.check_journal_policy(path.read_text())
 
     def test_later_conflicts_empty_resets_and_missing_keys_refuse_before_any_mask(self):
         conflicts = ['Storage=persistent', 'RuntimeMaxUse=1G', 'MaxRetentionSec=30day',
-                     'ForwardToSyslog=yes', 'ForwardToSyslog=']
+                     'MaxFileSec=1month', 'ForwardToSyslog=yes', 'ForwardToSyslog=']
         for directive in conflicts:
             manager = Manager(POLICY + '[Journal]\n' + directive + '\n')
             with self.subTest(directive=directive), fixture(manager), self.assertRaises(RuntimeError):
                 logging.configure_logging()
             self.assertFalse(manager.masked)
             self.assertEqual(1, len(manager.calls))
-        for key in ('Storage=volatile\n', 'RuntimeMaxUse=160M\n', 'MaxRetentionSec=1day\n', 'ForwardToSyslog=no\n'):
+        for key in ('Storage=volatile\n', 'RuntimeMaxUse=160M\n', 'MaxRetentionSec=1day\n', 'MaxFileSec=1h\n', 'ForwardToSyslog=no\n'):
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 logging.check_journal_policy(POLICY.replace(key, ''))
 
