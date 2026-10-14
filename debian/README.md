@@ -41,7 +41,8 @@ SSH management is restricted to WireGuard. The client must support the
 ML-KEM/X25519 hybrid exchange.
 
 Host policy configures volatile journald storage with `RuntimeMaxUse=160M` and
-`MaxRetentionSec=1day`, and disables syslog forwarding.
+`MaxRetentionSec=1day` with a new file every hour (`MaxFileSec=1h`, since
+journald deletes whole files), and disables syslog forwarding.
 The final `zz-diamaneos.conf` drop-in overrides vendor `syslog.conf` and
 `99-syslog.conf`. `host/apply` verifies the merged policy, masks the syslog
 socket, rsyslog, syslog-ng and its discovered instances. These receivers must be
