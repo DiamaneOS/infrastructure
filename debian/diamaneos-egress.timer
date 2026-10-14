@@ -4,8 +4,8 @@ Description=Refresh fixed upstream address sets before they expire
 
 [Timer]
 OnBootSec=30s
-OnUnitActiveSec=5min
-RandomizedDelaySec=30s
+OnUnitActiveSec=1min
+RandomizedDelaySec=10s
 
 [Install]
 WantedBy=timers.target

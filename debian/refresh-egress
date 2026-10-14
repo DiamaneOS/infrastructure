@@ -10,7 +10,8 @@ from pathlib import Path
 import pwd
 import socket
 import subprocess
-from egress_config import load_destinations
+import time
+from egress_config import load_destinations, load_seen, merge_seen, save_seen
 
 role = Path('/etc/diamaneos/web-role').read_text().strip()
 if role not in {'primary', 'mirror', 'attestation'}:
@@ -53,6 +54,17 @@ for key, (_, names) in destinations.items():
             found[address.version].add(str(address))
     addresses[key] = found
 
+# Each set holds every address resolved within the last hour, not only the latest answer.
+seen = merge_seen(load_seen(), {f'{key}{version}': found[version]
+                                for key, found in addresses.items() for version in (4, 6)}, time.time())
+for key, found in addresses.items():
+    for version in (4, 6):
+        found[version] |= set(seen.get(f'{key}{version}', {}))
+
+# Apple's location service answers from a pool too large to learn by resolving, so the relay may
+# reach Apple's own address blocks (ARIN: Apple Inc.) on 443.
+static = {4: ['17.0.0.0/8'], 6: ['2620:149::/32']} if role == 'primary' else {}
+
 # The mirror's self-check is explicit loopback, not NSS's synthesized list of
 # this host's public, WireGuard and link-local interface addresses.
 if 'monitor' in addresses:
@@ -66,6 +78,10 @@ for key, found in addresses.items():
         if found[version]:
             lines += ['  elements = { ' + ', '.join(sorted(found[version])) + ' }']
         lines += [' }']
+for version, networks in static.items():
+    kind = 'ipv4_addr' if version == 4 else 'ipv6_addr'
+    lines += [f' set apple{version} {{ type {kind}; flags interval;',
+              '  elements = { ' + ', '.join(networks) + ' }', ' }']
 lines += [' chain output { type filter hook output priority 10; policy accept;']
 users = [web]
 if role == 'attestation':
@@ -82,6 +98,9 @@ if role == 'primary':
         for version in (4, 6):
             proto = 'ip' if version == 4 else 'ip6'
             lines += [f'  meta skuid {web} {proto} daddr @{key}{version} tcp dport {port} accept']
+    for version in static:
+        proto = 'ip' if version == 4 else 'ip6'
+        lines += [f'  meta skuid {web} {proto} daddr @apple{version} tcp dport 443 accept']
 if role == 'attestation':
     lines += [f'  meta skuid {web} ip6 daddr ::1 tcp dport 8080 accept']
     app = pwd.getpwnam('attestation').pw_uid
@@ -104,3 +123,4 @@ lines += [' }', '}']
 policy = '\n'.join(lines) + '\n'
 subprocess.run(['nft', '-c', '-f', '-'], input=policy, text=True, check=True)
 subprocess.run(['nft', '-f', '-'], input=policy, text=True, check=True)
+save_seen(seen)

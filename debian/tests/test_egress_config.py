@@ -56,3 +56,26 @@ class EgressConfigurationTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SeenAddressTests(unittest.TestCase):
+    def test_addresses_are_kept_for_an_hour_after_their_last_answer(self):
+        seen = api.merge_seen({}, {'https4': {'17.1.1.1'}}, now=1000.0)
+        seen = api.merge_seen(seen, {'https4': {'17.2.2.2'}}, now=2000.0)
+        self.assertEqual({'17.1.1.1': 1000.0, '17.2.2.2': 2000.0}, seen['https4'])
+        seen = api.merge_seen(seen, {'https4': set()}, now=4700.0)
+        self.assertEqual({'17.2.2.2': 2000.0}, seen['https4'])
+
+    def test_saved_entries_that_are_not_public_or_from_the_future_are_dropped(self):
+        previous = {'https4': {'10.0.0.1': 900.0, 'not-an-address': 900.0, '17.1.1.1': 5000.0},
+                    'https6': 'broken'}
+        self.assertEqual({}, api.merge_seen(previous, {}, now=1000.0))
+
+    def test_unreadable_state_starts_empty_and_saving_replaces_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'seen.json'
+            self.assertEqual({}, api.load_seen(path))
+            path.write_text('{broken')
+            self.assertEqual({}, api.load_seen(path))
+            api.save_seen({'https4': {'17.1.1.1': 1.0}}, path)
+            self.assertEqual({'https4': {'17.1.1.1': 1.0}}, api.load_seen(path))
