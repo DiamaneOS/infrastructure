@@ -109,6 +109,12 @@ Release-signing keys are excluded from serving hosts.
   account keys. Nginx has only the low-port binding capability.
 - Service sandboxes and UID firewall rules restrict host IPC and outbound access.
   Primary relays share nginx’s UID. Attestation has a separate service account.
+- The role firewall allows each IPv4 address or IPv6 /64 32 connections to the
+  web ports, and to SUPL on the primary. Further connections get a TCP reset.
+  New connections above `nf_conntrack_max`/64 per second go through synproxy.
+  Both follow GrapheneOS's network firewall, as do the conntrack and TCP timeouts.
+- Management WireGuard packets are not connection-tracked. `bandwidth_mbit` in
+  `host.json` sets CAKE at 99.75 % of the provisioned rate.
 - Request logs are disabled. TLS-terminating relays process request payloads.
   Attestation retains account, device and verification-history state.
 - HTTPS time requires authenticated clock readiness. A watchdog failure removes

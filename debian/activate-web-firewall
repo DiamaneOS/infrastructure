@@ -5,23 +5,43 @@ import json
 from pathlib import Path
 import subprocess
 
-role = Path('/etc/diamaneos/web-role').read_text().strip()
-if role not in {'primary', 'mirror', 'attestation'}:
-    raise SystemExit('invalid web role')
-host = json.loads(Path('/etc/diamaneos/host.json').read_text())
-if host.get('management_mode') != 'wireguard' or host['management_cidrs']:
-    raise SystemExit('verified WireGuard-only management required')
-subprocess.run(['systemctl', 'is-active', '--quiet', 'wg-quick@wg-mgmt'], check=True)
-source = Path(__file__).resolve().parent / 'host/files/etc/nftables.conf'
-ports = '80, 443, 7275' if role == 'primary' else '80, 443'
-text = source.read_text().replace('        udp sport 547 udp dport 546 accept',
-    '        udp sport 547 udp dport 546 accept\n' +
-    f'        tcp dport {{ {ports} }} ct state new accept')
-candidate = Path('/etc/nftables.conf.candidate')
-candidate.write_text(text)
-subprocess.run(['nft', '-c', '-f', str(candidate)], check=True)
-target = Path('/etc/nftables.conf')
-if target.exists():
-    Path('/etc/diamaneos/firewall-before-web.nft').write_text(target.read_text())
-candidate.replace(target)
-subprocess.run(['nft', '-f', str(target)], check=True)
+HERE = Path(__file__).resolve().parent
+PORTS = {'primary': '80, 443, 7275', 'mirror': '80, 443', 'attestation': '80, 443'}
+
+
+def render(template, role, wireguard_port, conntrack_max):
+    """The role's policy. Synproxy takes new connections above conntrack_max/64 per second."""
+    if role not in PORTS:
+        raise SystemExit('invalid web role')
+    if type(wireguard_port) is not int or not 1024 <= wireguard_port <= 65535:
+        raise SystemExit('invalid WireGuard UDP port')
+    if type(conntrack_max) is not int or conntrack_max < 64:
+        raise SystemExit('invalid connection tracking size')
+    text = (template.replace('{{tcp_ports}}', PORTS[role])
+            .replace('{{wireguard_port}}', str(wireguard_port))
+            .replace('{{synproxy_threshold}}', str(conntrack_max // 64)))
+    if '{{' in text:
+        raise SystemExit('unrendered firewall placeholder')
+    return text
+
+
+def main():
+    role = Path('/etc/diamaneos/web-role').read_text().strip()
+    host = json.loads(Path('/etc/diamaneos/host.json').read_text())
+    if host.get('management_mode') != 'wireguard' or host['management_cidrs']:
+        raise SystemExit('verified WireGuard-only management required')
+    subprocess.run(['systemctl', 'is-active', '--quiet', 'wg-quick@wg-mgmt'], check=True)
+    conntrack_max = int(Path('/proc/sys/net/netfilter/nf_conntrack_max').read_text())
+    text = render((HERE / 'nftables-web.conf').read_text(), role, host['wireguard']['listen_port'], conntrack_max)
+    candidate = Path('/etc/nftables.conf.candidate')
+    candidate.write_text(text)
+    subprocess.run(['nft', '-c', '-f', str(candidate)], check=True)
+    target = Path('/etc/nftables.conf')
+    if target.exists():
+        Path('/etc/diamaneos/firewall-before-web.nft').write_text(target.read_text())
+    candidate.replace(target)
+    subprocess.run(['nft', '-f', str(target)], check=True)
+
+
+if __name__ == '__main__':
+    main()
