@@ -113,6 +113,8 @@ server {
     ssl_certificate /etc/letsencrypt/live/diamaneos-mirror/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/diamaneos-mirror/privkey.pem;
     location = /healthz { default_type text/plain; return 200 "ready\\n"; }
+    # The time of the monitor's last completed run, which the primary checks.
+    location = /monitor-heartbeat { default_type text/plain; disable_symlinks on; alias /var/lib/diamaneos-status-page/heartbeat; }
     location / { return 404; }
 }
 '''

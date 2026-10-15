@@ -90,7 +90,9 @@ there. Once DNS points the download names at their address, add
 
 The mirror also serves the unlisted `status.diamaneos.de` from
 `/var/lib/diamaneos-status-page`. A separate monitoring deployment writes that
-page. This repository does not stage it. Before the `diamaneos-status`
+page and the heartbeat `mirror.diamaneos.de/monitor-heartbeat`, the time of
+its last completed run, which the primary's monitor checks. This repository
+does not stage them. Before the `diamaneos-status`
 certificate exists, assemble with `--before-status-certificate` so only its
 HTTP server is live. Request the certificate, then assemble and install again
 without the option.

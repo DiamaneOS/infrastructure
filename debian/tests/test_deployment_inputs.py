@@ -154,6 +154,15 @@ class DeploymentInputsTest(unittest.TestCase):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 host.download_addresses({'download_addresses': values})
 
+    def test_mirror_serves_only_its_health_reply_and_the_monitor_heartbeat(self):
+        self.assertEqual(self.assemble('mirror', self.base / 'mirror').returncode, 0)
+        text = (self.base / 'mirror' / 'mirror.conf').read_text()
+        https = next(block for block in text.split('server {') if 'mirror.diamaneos.de' in block and '443' in block)
+        self.assertEqual(['location = /healthz { default_type text/plain; return 200 "ready\\n"; }',
+                          'location = /monitor-heartbeat { default_type text/plain; disable_symlinks on; '
+                          'alias /var/lib/diamaneos-status-page/heartbeat; }',
+                          'location / { return 404; }'], re.findall(r'location [^\n]+', https))
+
     def test_missing_or_external_includes_reject_without_output(self):
         entry = self.source / 'attestation/nginx/nginx.conf'
         for expression in ['missing.conf', '../outside.conf', '/etc/secret.conf']:
