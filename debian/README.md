@@ -78,6 +78,15 @@ uses `releases-na.diamaneos.de` and `apps-na.diamaneos.de`. Each host obtains it
 own ACME certificates and answers its own challenges. Use webroot renewal once
 nginx occupies the HTTP port.
 
+The primary's download names can have their own address, so a flood on them
+leaves the other services' address alone. List it in `download_addresses` in
+`host.json` (one IPv4 and at most one IPv6 address). `configure-host` adds it to
+the interface and a networkd drop-in, without reconfiguring the link. Pass the
+same addresses to `assemble-nginx primary` as `--download-address`: releases and
+apps then also answer there, and every other name and SUPL closes the connection
+there. Once DNS points the download names at their address, add
+`--downloads-moved`, so they no longer answer on the shared address of that family.
+
 The mirror also serves the unlisted `status.diamaneos.de` from
 `/var/lib/diamaneos-status-page`. A separate monitoring deployment writes that
 page. This repository does not stage it. Before the `diamaneos-status`

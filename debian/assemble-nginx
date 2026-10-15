@@ -4,18 +4,81 @@
 from pathlib import Path
 import fnmatch
 import glob
+import ipaddress
 import re
 import sys
 
+USAGE = ('usage: assemble-nginx primary|mirror|attestation SOURCE_ROOT OUTPUT [--before-status-certificate]'
+         ' [--download-address ADDRESS]... [--downloads-moved]')
+DOWNLOAD_NAMES = {'releases.diamaneos.de', 'apps.diamaneos.de'}
+if len(sys.argv) < 4:
+    raise SystemExit(USAGE)
+role, source, output = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
+options = sys.argv[4:]
 # nginx refuses to start without a certificate, so the first status certificate
 # is requested while only the status page's HTTP server is live.
-pending = sys.argv[4:] == ['--before-status-certificate']
-if len(sys.argv) != 4 + pending or (pending and sys.argv[1] != 'mirror'):
-    raise SystemExit('usage: assemble-nginx primary|mirror|attestation SOURCE_ROOT OUTPUT'
-                     ' [--before-status-certificate]')
-role, source, output = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
+pending = '--before-status-certificate' in options
+# The primary's download names can have their own addresses (host.json download_addresses).
+# Moved: they no longer answer on the shared address of that family, once DNS points at theirs.
+moved = '--downloads-moved' in options
+downloads = {}
+rest = [option for option in options if option not in ('--before-status-certificate', '--downloads-moved')]
+while rest[:1] == ['--download-address'] and len(rest) > 1:
+    try:
+        address = ipaddress.ip_address(rest[1])
+    except ValueError:
+        raise SystemExit('invalid download address') from None
+    if (address.version in downloads or address.is_loopback or address.is_link_local
+            or address.is_multicast or address.is_unspecified):
+        raise SystemExit('download addresses: one unicast IPv4 and at most one IPv6 address')
+    downloads[address.version] = address
+    del rest[:2]
+if rest or (pending and role != 'mirror') or ((downloads or moved) and role != 'primary') or (moved and not downloads):
+    raise SystemExit(USAGE)
 if role not in {'primary', 'mirror', 'attestation'}:
     raise SystemExit('invalid role')
+
+
+def listen(address, port):
+    return f'[{address}]:{port}' if address.version == 6 else f'{address}:{port}'
+
+
+def download_vhosts(text):
+    """Add the download addresses to the download servers' wildcard listens, or replace them if moved."""
+    changed = set()
+
+    def replace(match):
+        address = downloads.get(6 if match[2] else 4)
+        if address is None:
+            return match[0]
+        changed.add(address.version)
+        line = f'{match[1]}listen {listen(address, match[3])}{match[4] or ""};'
+        return line if moved else match[0] + '\n' + line
+
+    blocks = re.split(r'(?m)^(?=server \{)', text)
+    for index, block in enumerate(blocks):
+        names = re.search(r'\bserver_name\s+([^;]+);', block)
+        if names and set(names[1].split()) <= DOWNLOAD_NAMES:
+            blocks[index] = re.sub(r'(?m)^(\s*)listen (\[::\]:)?(80|443)( ssl)?;$', replace, block)
+    if changed != set(downloads):
+        raise SystemExit('download servers have no wildcard listen for each download address')
+    # Any other name on these addresses gets its connection closed.
+    defaults = ''.join(f'server {{\n    listen {listen(address, 80)} default_server;\n    return 444;\n}}\n\n'
+                       f'server {{\n    listen {listen(address, 443)} default_server ssl;\n'
+                       '    ssl_reject_handshake on;\n}\n\n' for address in downloads.values())
+    return '# Only the download names answer on the download addresses.\n' + defaults + ''.join(blocks)
+
+
+def download_supl(text):
+    """The download addresses close SUPL connections instead of relaying them."""
+    before, separator, after = text.partition('\nstream {')
+    if not separator or not after.endswith('\n}\n'):
+        raise SystemExit('stream block not found')
+    servers = ''.join(f'\n    server {{\n        listen {listen(address, 7275)};\n        return "";\n    }}\n'
+                      for address in downloads.values())
+    return before + separator + after[:-2] + '\n    # No SUPL relay on the download addresses.' + servers + '}\n'
+
+
 if output.exists():
     raise SystemExit('output must be a new directory')
 files = {}
@@ -28,6 +91,9 @@ if role == 'primary':
     files['nginx.conf'] = (source / 'network/nginx/nginx.conf').read_text()
     files['nginx.conf'] = files['nginx.conf'].replace(
         'include releases[.]conf;', 'include releases[.]conf;\n    include website[.]conf;')
+    if downloads:
+        files['releases.conf'] = download_vhosts(files['releases.conf'])
+        files['nginx.conf'] = download_supl(files['nginx.conf'])
 if role == 'mirror':
     # Reuse the artifact handlers on fixed regional names. Each host answers
     # its own ACME challenges. Client fallback does not change shared DNS.
