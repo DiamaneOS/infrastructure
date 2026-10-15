@@ -86,8 +86,10 @@ def wireguard_settings(config):
 
 
 def download_addresses(config):
-    """Own addresses for the download names: one IPv4 and at most one IPv6 address."""
-    values = config.get('download_addresses', [])
+    """Own addresses for the download names: one IPv4 and at most one IPv6 address. None if not managed."""
+    if 'download_addresses' not in config:
+        return None
+    values = config['download_addresses']
     if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
         raise ValueError('download_addresses must be a list of addresses')
     addresses = [ipaddress.ip_address(value) for value in values]
@@ -206,16 +208,18 @@ def main():
     subprocess.run(['timedatectl', 'set-timezone', 'UTC'], check=True)
 
     # Added now without reconfiguring the link (DHCP, SSH sessions). networkd adds them at boot.
+    # Without the field the addresses are left as they are.
     dropin = Path(f'/etc/systemd/network/{network_file}.d/60-diamaneos-addresses.conf')
-    previous = re.findall(r'(?m)^Address=(\S+)$', dropin.read_text()) if dropin.exists() else []
-    for address in set(previous) - set(downloads):
-        subprocess.run(['ip', 'address', 'del', address, 'dev', interface], check=False)
-    if downloads:
-        write(dropin, ''.join(f'[Address]\nAddress={address}\n' for address in downloads))
-    else:
-        dropin.unlink(missing_ok=True)
-    for address in downloads:
-        subprocess.run(['ip', 'address', 'replace', address, 'dev', interface], check=True)
+    if downloads is not None:
+        previous = re.findall(r'(?m)^Address=(\S+)$', dropin.read_text()) if dropin.exists() else []
+        for address in set(previous) - set(downloads):
+            subprocess.run(['ip', 'address', 'del', address, 'dev', interface], check=False)
+        if downloads:
+            write(dropin, ''.join(f'[Address]\nAddress={address}\n' for address in downloads))
+        else:
+            dropin.unlink(missing_ok=True)
+        for address in downloads:
+            subprocess.run(['ip', 'address', 'replace', address, 'dev', interface], check=True)
 
     if bandwidth is not None:
         rate_kbit = bandwidth * 1000 * 9975 // 10000
