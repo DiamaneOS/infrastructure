@@ -146,7 +146,8 @@ class DeploymentInputsTest(unittest.TestCase):
         loader = importlib.machinery.SourceFileLoader('configure_host', str(ROOT / 'debian/host/configure-host'))
         host = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
         loader.exec_module(host)
-        self.assertEqual([], host.download_addresses({}))
+        self.assertIsNone(host.download_addresses({}))
+        self.assertEqual([], host.download_addresses({'download_addresses': []}))
         self.assertEqual(['203.0.113.7/32', '2001:db8::7/128'],
                          host.download_addresses({'download_addresses': ['203.0.113.7', '2001:db8::7']}))
         for values in (['203.0.113.7', '198.51.100.1'], ['127.0.0.1'], ['fe80::1'], ['203.0.113.7/32'], [7], '203.0.113.7'):
