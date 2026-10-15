@@ -6,8 +6,10 @@ Unknown bindings and remaining production references refuse output.
 
 `web` serves the website, Releases and Apps from separate read-only publication
 roots beneath `/srv/diamaneos-staging`. Contact submission returns 503. No backend
-or mail service is connected. The attestation hostname has a closed-response
-frontend. Noindex headers apply to the configuration; website robots disallow crawling.
+or mail service is connected. `--with-attestation` also renders a closed-response
+frontend for `attestation.staging.diamaneos.de`. Its DNS records and the certificate
+must then name it too. Noindex headers apply to the configuration; website robots
+disallow crawling.
 
 `attestation-disabled` is a separate configuration. Every HTTPS request returns
 503. Its backend definition remains loopback-only. Runtime activation requires a
@@ -22,7 +24,7 @@ from `/srv/diamaneos-staging/acme`. The renderer writes only a fresh local outpu
 directory. It does not install dependencies, obtain certificates or start services.
 
 ```sh
-python3 debian/staging/render.py web SOURCE OUTPUT --website-headers WEBSITE_HEADERS
+python3 debian/staging/render.py web SOURCE OUTPUT --website-headers WEBSITE_HEADERS [--with-attestation]
 python3 debian/staging/render.py attestation-disabled SOURCE SEPARATE_OUTPUT
 python3 -B -m unittest discover -s debian/staging -p 'test_*.py'
 ```
