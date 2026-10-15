@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+import importlib.machinery
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -91,6 +93,65 @@ class DeploymentInputsTest(unittest.TestCase):
         refused = self.assemble('primary', self.base / 'refused', '--before-status-certificate')
         self.assertNotEqual(refused.returncode, 0)
         self.assertFalse((self.base / 'refused').exists())
+
+    def test_download_addresses_serve_only_the_download_names(self):
+        (self.source / 'network/nginx/nginx.conf').write_text(
+            'http {\n    include releases[.]conf;\n}\n\nstream {\n    server {\n        listen 7275 default_server ssl;\n'
+            '        proxy_pass supl.google.com;\n    }\n}\n')
+        (self.source / 'releases/nginx/releases.conf').write_text(
+            'server {\n    listen 80;\n    listen [::]:80;\n    server_name releases.diamaneos.de apps.diamaneos.de;\n}\n\n'
+            'server {\n    listen 443 ssl;\n    listen [::]:443 ssl;\n    server_name apps.diamaneos.de;\n}\n\n'
+            'server {\n    listen 443 ssl;\n    server_name diamaneos.de;\n}\n')
+        v4, v6 = '203.0.113.7', '2001:db8::7'
+
+        def servers(destination, *options):
+            result = self.assemble('primary', destination, *options)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = (destination / 'releases.conf').read_text()
+            return text, [block for block in text.split('server {')[1:]], (destination / 'nginx.conf').read_text()
+
+        text, blocks, main = servers(self.base / 'both', '--download-address', v4, '--download-address', v6)
+        self.assertEqual(blocks[:4], [f'\n    listen {v4}:80 default_server;\n    return 444;\n}}\n\n',
+                                      f'\n    listen {v4}:443 default_server ssl;\n    ssl_reject_handshake on;\n}}\n\n',
+                                      f'\n    listen [{v6}]:80 default_server;\n    return 444;\n}}\n\n',
+                                      f'\n    listen [{v6}]:443 default_server ssl;\n    ssl_reject_handshake on;\n}}\n\n'])
+        self.assertIn(f'    listen 80;\n    listen {v4}:80;\n    listen [::]:80;\n    listen [{v6}]:80;\n', blocks[4])
+        self.assertIn(f'    listen 443 ssl;\n    listen {v4}:443 ssl;\n    listen [::]:443 ssl;\n    listen [{v6}]:443 ssl;\n', blocks[5])
+        self.assertEqual(['listen 443 ssl;'], re.findall(r'listen [^\n]+', blocks[6]))
+        self.assertIn('include ads.conf;', blocks[5])
+        self.assertTrue(main.endswith(f'    server {{\n        listen {v4}:7275;\n        return "";\n    }}\n\n'
+                                      f'    server {{\n        listen [{v6}]:7275;\n        return "";\n    }}\n}}\n'))
+        self.assertIn('include website[.]conf;', main)
+
+        # Moved: IPv4 answers only on its own address, IPv6 keeps the shared one.
+        _, blocks, _ = servers(self.base / 'moved', '--download-address', v4, '--downloads-moved')
+        self.assertEqual([f'listen {v4}:80;', 'listen [::]:80;'], re.findall(r'listen [^\n]+', blocks[2]))
+        self.assertEqual([f'listen {v4}:443 ssl;', 'listen [::]:443 ssl;'], re.findall(r'listen [^\n]+', blocks[3]))
+        self.assertEqual(['listen 443 ssl;'], re.findall(r'listen [^\n]+', blocks[4]))
+
+        refusals = {'mirror role': ('mirror', '--download-address', v4), 'two IPv4': ('primary', '--download-address', v4,
+                    '--download-address', '198.51.100.1'), 'loopback': ('primary', '--download-address', '127.0.0.1'),
+                    'not an address': ('primary', '--download-address', 'releases'), 'moved alone': ('primary', '--downloads-moved'),
+                    'missing value': ('primary', '--download-address')}
+        for name, (role, *options) in refusals.items():
+            with self.subTest(name):
+                self.assertNotEqual(self.assemble(role, self.base / 'refused', *options).returncode, 0)
+                self.assertFalse((self.base / 'refused').exists())
+        # Without a wildcard listen to extend the assembly refuses.
+        (self.source / 'releases/nginx/releases.conf').write_text('server {\n server_name releases.diamaneos.de;\n}\n')
+        self.assertNotEqual(self.assemble('primary', self.base / 'refused', '--download-address', v4).returncode, 0)
+        self.assertFalse((self.base / 'refused').exists())
+
+    def test_host_download_addresses(self):
+        loader = importlib.machinery.SourceFileLoader('configure_host', str(ROOT / 'debian/host/configure-host'))
+        host = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(host)
+        self.assertEqual([], host.download_addresses({}))
+        self.assertEqual(['203.0.113.7/32', '2001:db8::7/128'],
+                         host.download_addresses({'download_addresses': ['203.0.113.7', '2001:db8::7']}))
+        for values in (['203.0.113.7', '198.51.100.1'], ['127.0.0.1'], ['fe80::1'], ['203.0.113.7/32'], [7], '203.0.113.7'):
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                host.download_addresses({'download_addresses': values})
 
     def test_missing_or_external_includes_reject_without_output(self):
         entry = self.source / 'attestation/nginx/nginx.conf'

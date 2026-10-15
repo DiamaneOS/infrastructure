@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # SPDX-License-Identifier: Apache-2.0
-"""Apply validated, private host inputs without changing addresses or routes."""
+"""Apply validated, private host inputs. Adds only the listed download addresses, never routes."""
 import base64
 import ipaddress
 import json
@@ -85,6 +85,19 @@ def wireguard_settings(config):
     return {'listen_port': port, 'address': address, 'peers': validated}
 
 
+def download_addresses(config):
+    """Own addresses for the download names: one IPv4 and at most one IPv6 address."""
+    values = config.get('download_addresses', [])
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+        raise ValueError('download_addresses must be a list of addresses')
+    addresses = [ipaddress.ip_address(value) for value in values]
+    if (len({address.version for address in addresses}) != len(addresses) or
+            any(address.is_loopback or address.is_link_local or address.is_multicast or
+                address.is_unspecified for address in addresses)):
+        raise ValueError('download addresses: one unicast IPv4 and at most one IPv6 address')
+    return [f'{address}/{address.max_prefixlen}' for address in addresses]
+
+
 def management_rules(config):
     """Render the selected policy; any public fallback is explicit and bounded."""
     mode = config.get('management_mode', 'source-restricted')
@@ -149,7 +162,8 @@ def main():
         raise SystemExit('private host configuration must be root-owned and not writable by others')
     config = json.loads(path.read_text())
     required = {'hostname', 'admin_user', 'management_cidrs', 'interface', 'network_file', 'bandwidth_mbit'}
-    if not required <= set(config) or set(config) - required - {'management_mode', 'wireguard'}:
+    optional = {'management_mode', 'wireguard', 'download_addresses'}
+    if not required <= set(config) or set(config) - required - optional:
         raise SystemExit('private host configuration fields differ from the documented inputs')
     hostname = config['hostname']
     admin = config['admin_user']
@@ -172,6 +186,7 @@ def main():
         raise SystemExit('invalid provisioned bandwidth')
     try:
         rules = management_rules(config)
+        downloads = download_addresses(config)
     except (TypeError, ValueError) as error:
         raise SystemExit(str(error)) from error
 
@@ -189,6 +204,18 @@ def main():
     write('/etc/hosts', '\n'.join(hosts) + '\n')
     subprocess.run(['hostnamectl', 'set-hostname', hostname], check=True)
     subprocess.run(['timedatectl', 'set-timezone', 'UTC'], check=True)
+
+    # Added now without reconfiguring the link (DHCP, SSH sessions). networkd adds them at boot.
+    dropin = Path(f'/etc/systemd/network/{network_file}.d/60-diamaneos-addresses.conf')
+    previous = re.findall(r'(?m)^Address=(\S+)$', dropin.read_text()) if dropin.exists() else []
+    for address in set(previous) - set(downloads):
+        subprocess.run(['ip', 'address', 'del', address, 'dev', interface], check=False)
+    if downloads:
+        write(dropin, ''.join(f'[Address]\nAddress={address}\n' for address in downloads))
+    else:
+        dropin.unlink(missing_ok=True)
+    for address in downloads:
+        subprocess.run(['ip', 'address', 'replace', address, 'dev', interface], check=True)
 
     if bandwidth is not None:
         rate_kbit = bandwidth * 1000 * 9975 // 10000
