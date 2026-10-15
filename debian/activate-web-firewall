@@ -19,7 +19,8 @@ def render(template, role, wireguard_port, conntrack_max):
         raise SystemExit('invalid connection tracking size')
     text = (template.replace('{{tcp_ports}}', PORTS[role])
             .replace('{{wireguard_port}}', str(wireguard_port))
-            .replace('{{synproxy_threshold}}', str(conntrack_max // 64)))
+            .replace('{{synproxy_threshold}}', str(conntrack_max // 64))
+            .replace('{{conntrack_max}}', str(conntrack_max)))
     if '{{' in text:
         raise SystemExit('unrendered firewall placeholder')
     return text

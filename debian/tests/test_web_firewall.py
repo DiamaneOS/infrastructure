@@ -18,13 +18,14 @@ class WebFirewallTests(unittest.TestCase):
         self.assertNotIn('{{', text)
         self.assertIn('iifname != "wg-mgmt" tcp dport { 80, 443, 7275 } goto input-web', text)
         self.assertIn('limit rate over 4096/second burst 4096 packets', text)
+        self.assertEqual(text.count('size 262144'), 2)
         self.assertIn('udp dport 51820 notrack accept', text)
         self.assertIn('udp dport 51820 ct state untracked accept', text)
         for role in ('mirror', 'attestation'):
             self.assertIn('tcp dport { 80, 443 } goto', firewall.render(TEMPLATE, role, 51820, 65536))
 
     def test_both_counting_paths_cap_each_address_and_64(self):
-        for chain in ('input-web-established', 'input-web-loopback'):
+        for chain in ('input-web-new', 'input-web-loopback'):
             body = TEMPLATE.split('chain ' + chain + ' {', 1)[1].split('}\n', 1)[0]
             self.assertIn('{ ip saddr ct count over 32 }', body)
             self.assertIn('{ ip6 saddr and ffff:ffff:ffff:ffff:: ct count over 32 }', body)
