@@ -97,8 +97,15 @@ log in as. `configure-host` adds the peer to `wg-mgmt.conf`, a rule for those
 ports to the management firewall, the account to `AllowUsers`, and
 `sshd_config.d/01-diamaneos-health.conf`: from the peer's address only the
 reporter may log in, with a forced command and no forwarding. The reporter
-account and its key restriction come from the monitoring deployment. Without
-the field the reporter's SSH file is left as it is.
+account and its key restriction come from the monitoring deployment.
+
+The monitoring host itself lists `health_collector`: its `reporter` and the
+`peers` it dials, each with `name`, `public_key`, tunnel `address`, `endpoint`
+(HOST:PORT) and `keepalive`. `configure-host` adds those peers to `wg-mgmt.conf`
+and writes the same SSH files, with the host's own tunnel address, so the
+collector can check this host too. These peers get no firewall rule, only their
+replies come back. A host has one of the two fields. Without either the
+reporter's SSH file is left as it is.
 
 The mirror also serves the unlisted `status.diamaneos.de` from
 `/var/lib/diamaneos-status-page`. A separate monitoring deployment writes that
