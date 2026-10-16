@@ -53,6 +53,13 @@ class EgressConfigurationTests(unittest.TestCase):
         self.path.write_text('{"smtp":{},"smtp":{}}')
         with self.assertRaises(ValueError): self.load()
 
+    def test_monitor_lists_up_to_the_host_name_cap(self):
+        names = ['host%d.example.net' % i for i in range(api.MAX_HOSTNAMES + 1)]
+        self.path.write_text(json.dumps({'monitor': {'port': 443, 'hostnames': names[:-1]}})); self.path.chmod(0o600)
+        self.assertEqual((443, names[:-1]), self.load()['monitor'])
+        self.path.write_text(json.dumps({'monitor': {'port': 443, 'hostnames': names}}))
+        with self.assertRaises(ValueError): self.load()
+
 
 if __name__ == '__main__':
     unittest.main()
