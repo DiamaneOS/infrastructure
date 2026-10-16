@@ -73,6 +73,15 @@ The primary configuration accepts an optional local `website.conf` include.
 Website content, its certificate and contact handler are supplied by the
 website deployment. This repository does not stage them.
 
+The primary also serves the web installer as `install.diamaneos.de` from
+`/srv/diamaneos-installer/current`, with its own `diamaneos-installer`
+certificate. `installer/` holds the server and the installer's header files.
+When nothing is published there, every path answers 404.
+
+Before that certificate exists, assemble with `--before-installer-certificate`
+so only the installer's HTTP server is live. Request the certificate, then
+assemble and install again without the option.
+
 Primary downloads use `releases.diamaneos.de` and `apps.diamaneos.de`. The mirror
 uses `releases-na.diamaneos.de` and `apps-na.diamaneos.de`. Each host obtains its
 own ACME certificates and answers its own challenges. Use webroot renewal once

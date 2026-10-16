@@ -17,7 +17,12 @@ configuration supplied outside the renderer.
 The staging crawler policy merges into nested responses. Request logs remain
 disabled, and unknown hosts retain the inherited refusal behavior.
 
-All names use the `diamaneos-staging` certificate lineage. HTTP serves challenges
+`web` also serves the primary's installer site as `install.staging.diamaneos.de`
+from `/srv/diamaneos-staging/installer/current`, with its own
+`diamaneos-staging-installer` certificate lineage. Before that certificate exists,
+render with `--before-installer-certificate` so only its HTTP server is live.
+
+All other names use the `diamaneos-staging` certificate lineage. HTTP serves challenges
 from `/srv/diamaneos-staging/acme`. The renderer writes only a fresh local output
 directory. It does not install dependencies, obtain certificates or start services.
 

@@ -18,6 +18,7 @@ HOSTS = {
     'releases-na.diamaneos.de': 'releases.staging.diamaneos.de',
     'apps-na.diamaneos.de': 'apps.staging.diamaneos.de',
     'attestation.diamaneos.de': 'attestation.staging.diamaneos.de',
+    'install.diamaneos.de': 'install.staging.diamaneos.de',
 }
 FILES = {
     'root_releases.diamaneos.de.conf': 'root_releases.staging.diamaneos.de.conf',
@@ -29,6 +30,7 @@ ROOTS = {
     '/srv/apps.diamaneos.de_a': BASE + '/apps/current',
     '/srv/releases': BASE + '/releases/metadata',
     '/srv/attestation.diamaneos.de_a': BASE + '/attestation/public',
+    '/srv/diamaneos-installer/current': BASE + '/installer/current',
     '/var/lib/letsencrypt/webroot': BASE + '/acme',
     '/var/empty': '/var/empty',
 }
@@ -37,6 +39,7 @@ LINEAGES = {
     'diamaneos-mirror': 'diamaneos-staging',
     'diamaneos-mirror-artifacts': 'diamaneos-staging',
     'diamaneos-attestation': 'diamaneos-staging',
+    'diamaneos-installer': 'diamaneos-staging-installer',
 }
 DIRECTIVE = re.compile(r'(?m)^(\s*)(server_name|ssl_certificate_key|ssl_certificate|root|alias|include|return)\s+([^;\n]+);')
 DOMAIN = re.compile(r'(?<![\w.-])(?:[a-z0-9-]+\.)*diamaneos\.de(?![\w.-])')
@@ -82,7 +85,9 @@ def rewrite(text):
         return indent + kind + ' ' + value + ';'
     return DIRECTIVE.sub(directive, text)
 def validate(files, role):
-    allowed = {'staging.diamaneos.de', 'releases.staging.diamaneos.de', 'apps.staging.diamaneos.de', 'attestation.staging.diamaneos.de'} if role == 'web' else {'attestation.staging.diamaneos.de'}
+    allowed = ({'staging.diamaneos.de', 'releases.staging.diamaneos.de', 'apps.staging.diamaneos.de',
+                'attestation.staging.diamaneos.de', 'install.staging.diamaneos.de'} if role == 'web'
+               else {'attestation.staging.diamaneos.de'})
     for name, text in files.items():
         if not name.endswith('.conf'):
             continue
@@ -90,7 +95,7 @@ def validate(files, role):
         require(all(host in allowed for host in DOMAIN.findall(name + '\n' + text)),
                 'Production or unexpected hostname remains')
         require(not re.search(r'/srv/(?!diamaneos-staging(?:/|\b))', text)
-                and not re.search(r'/etc/letsencrypt/live/(?!diamaneos-staging/)', text)
+                and not re.search(r'/etc/letsencrypt/live/(?!diamaneos-staging(?:-installer)?/)', text)
                 and '/run/diamaneos-contact' not in text and '/var/lib/attestation' not in text,
                 'Production path remains')
         require('proxy_pass' not in text if role == 'web' else True, 'Static web cannot proxy to a backend')
@@ -141,10 +146,18 @@ server {
     CLOSED_RESPONSE
 }
 '''
-def render(role, source, output, website_headers=None):
+def installer(pending):
+    """The primary's installer site with staging names. Before its certificate only the HTTP server."""
+    files = {path.name: read(path, 16384) for path in sorted((HERE.parent / 'installer').glob('*.conf'))}
+    if pending:
+        blocks = re.split(r'(?m)^(?=server \{)', files['installer.conf'])
+        files = {'installer.conf': ''.join(block for block in blocks if not re.search(r'(?m)^\s*listen [^;]*443', block))}
+    return {name: rewrite(text) for name, text in files.items()}
+def render(role, source, output, website_headers=None, installer_pending=False):
     source, output = Path(source), Path(output)
     require(source.resolve() == source, 'Symlinked source root is unsupported')
     require(role in ('web', 'attestation-disabled'), 'Unsupported staging role')
+    require(role == 'web' or not installer_pending, 'The installer site is part of web')
     require(not output.exists() and not output.is_symlink() and output.parent.resolve() == output.parent,
             'Output must be a fresh path without symlink ancestors')
     base_role = 'mirror' if role == 'web' else 'attestation'
@@ -173,6 +186,9 @@ def render(role, source, output, website_headers=None):
         inputs['closed-attestation-state'] = hashlib.sha256(state.encode()).hexdigest()
         files['website-headers.conf'] = headers
         inputs['website-headers.conf'] = hashlib.sha256(headers.encode()).hexdigest()
+        files.update(installer(installer_pending))
+        require(files['nginx.conf'].count('include mirror.conf;') == 1, 'Website include is required')
+        files['nginx.conf'] = files['nginx.conf'].replace('include mirror.conf;', 'include mirror.conf;\n    include installer.conf;')
     else:
         require('service-state.conf' in files, 'Attestation enrollment fence missing')
         files['service-state.conf'] = 'return 503;\n'
@@ -202,6 +218,8 @@ def main():
     parser.add_argument('role', choices=('web', 'attestation-disabled'))
     parser.add_argument('source', type=Path); parser.add_argument('output', type=Path)
     parser.add_argument('--website-headers', type=Path)
-    args = parser.parse_args(); render(args.role, args.source, args.output, args.website_headers)
+    parser.add_argument('--before-installer-certificate', action='store_true')
+    args = parser.parse_args()
+    render(args.role, args.source, args.output, args.website_headers, args.before_installer_certificate)
 if __name__ == '__main__':
     main()

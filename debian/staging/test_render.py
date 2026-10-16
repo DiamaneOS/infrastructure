@@ -63,6 +63,22 @@ class RenderTests(unittest.TestCase):
         self.assertIn('attestation.staging.diamaneos.de',text)
         self.assertNotIn('proxy_pass',text)
 
+    def test_installer_site_uses_staging_names_and_its_own_lineage(self):
+        self.render()
+        text = (self.output / 'installer.conf').read_text()
+        for line in ('server_name install.staging.diamaneos.de;', 'root /srv/diamaneos-staging/acme;',
+                     'ssl_certificate_key /etc/letsencrypt/live/diamaneos-staging-installer/privkey.pem;',
+                     'root /srv/diamaneos-staging/installer/current;', 'include installer-page.conf;'):
+            self.assertIn(line, text)
+        self.assertTrue((self.output / 'installer-page.conf').is_file())
+        self.assertIn('include mirror.conf;\n    include installer.conf;', (self.output / 'nginx.conf').read_text())
+        shutil.rmtree(self.output)
+        renderer.render('web', self.source, self.output, self.headers, installer_pending=True)
+        text = (self.output / 'installer.conf').read_text()
+        self.assertIn('location /.well-known/acme-challenge/', text)
+        self.assertNotIn('443', text)
+        self.assertFalse((self.output / 'installer-page.conf').exists())
+
     def test_attestation_is_separate_loopback_and_closed(self):
         self.render('attestation-disabled')
         self.assertEqual('return 503;\n', (self.output / 'service-state.conf').read_text())
