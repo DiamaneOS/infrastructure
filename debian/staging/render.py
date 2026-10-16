@@ -125,6 +125,46 @@ server {
     location = /contact/submit { return 503; }
     location = /robots.txt { default_type text/plain; return 200 "User-agent: *\\nDisallow: /\\n"; }
     location = /healthz { default_type text/plain; return 200 "ready\\n"; }
+    # The security contact files, as on the production website.
+    location = /.well-known/security.txt {
+        if ($request_method !~ ^(?:GET|HEAD)$) { return 405; }
+        types { }
+        default_type text/plain;
+        charset utf-8;
+        try_files $uri =404;
+    }
+    location = /security-public.asc {
+        if ($request_method !~ ^(?:GET|HEAD)$) { return 405; }
+        types { }
+        default_type application/pgp-keys;
+        try_files $uri =404;
+    }
+    location = /security-public.pgp {
+        if ($request_method !~ ^(?:GET|HEAD)$) { return 405; }
+        types { }
+        default_type application/pgp-keys;
+        try_files $uri =404;
+    }
+    # Production's header set for this location replaces the server's instead of merging.
+    location ^~ /.well-known/openpgpkey/ {
+        if ($request_method !~ ^(?:GET|HEAD)$) { return 405; }
+        if ($uri !~ ^/\\.well-known/openpgpkey/(?:policy|hu/t5s8ztdbon8yzntexy6oz5y48etqsnbb)$) { return 404; }
+        types { }
+        default_type application/octet-stream;
+        add_header_inherit on;
+        add_header Content-Security-Policy "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "same-origin" always;
+        add_header Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), hid=(), magnetometer=(), microphone=(), payment=(), serial=(), usb=()" always;
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Resource-Policy "cross-origin" always;
+        add_header Cross-Origin-Embedder-Policy "require-corp" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header Access-Control-Allow-Origin "*" always;
+        NOINDEX_HEADER
+        try_files $uri =404;
+    }
     # The short link the setup wizard shows, as on the production website.
     location ~* ^/ubl/?$ { return 301 /faq/#bootloader-locking-setup; }
     location ~ (^|/)\\. { return 404; }
@@ -202,8 +242,11 @@ def render(role, source, output, website_headers=None, installer_pending=False):
     for name, text in list(files.items()):
         if name.endswith('.conf'):
             files[name] = re.sub(r'(?m)^\s*add_header X-Robots-Tag [^\n]+;\n?', '', text)
-    files['noindex.conf'] = ('add_header_inherit merge;\n'
-                             'add_header X-Robots-Tag "noindex, nofollow, noarchive" always;\n')
+    noindex = 'add_header X-Robots-Tag "noindex, nofollow, noarchive" always;'
+    files['noindex.conf'] = 'add_header_inherit merge;\n' + noindex + '\n'
+    if role == 'web':
+        # A location that does not merge repeats the noindex header.
+        files['mirror.conf'] = files['mirror.conf'].replace('NOINDEX_HEADER', noindex)
     require(files['nginx.conf'].count('http {') == 1, 'Explicit HTTP context is required')
     files['nginx.conf'] = files['nginx.conf'].replace('http {', 'http {\n    include noindex.conf;')
     validate(files, role)
