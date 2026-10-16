@@ -5,12 +5,14 @@ from pathlib import Path
 import fnmatch
 import glob
 import ipaddress
+import json
 import re
 import sys
 
 USAGE = ('usage: assemble-nginx primary|mirror|attestation SOURCE_ROOT OUTPUT [--before-status-certificate]'
-         ' [--download-address ADDRESS]... [--downloads-moved]')
+         ' [--host-json PATH] [--download-address ADDRESS]... [--downloads-moved]')
 DOWNLOAD_NAMES = {'releases.diamaneos.de', 'apps.diamaneos.de'}
+HOST_JSON = '/etc/diamaneos/host.json'
 if len(sys.argv) < 4:
     raise SystemExit(USAGE)
 role, source, output = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
@@ -19,24 +21,77 @@ options = sys.argv[4:]
 # is requested while only the status page's HTTP server is live.
 pending = '--before-status-certificate' in options
 # The primary's download names can have their own addresses (host.json download_addresses).
-# Moved: they no longer answer on the shared address of that family, once DNS points at theirs.
+# Moved: they no longer answer on the shared address of that family, once DNS points at theirs
+# (host.json downloads_moved). The options give the same settings without host.json.
 moved = '--downloads-moved' in options
 downloads = {}
+host_json = None
 rest = [option for option in options if option not in ('--before-status-certificate', '--downloads-moved')]
-while rest[:1] == ['--download-address'] and len(rest) > 1:
+
+
+def add_download(value, found):
     try:
-        address = ipaddress.ip_address(rest[1])
+        address = ipaddress.ip_address(value)
     except ValueError:
         raise SystemExit('invalid download address') from None
-    if (address.version in downloads or address.is_loopback or address.is_link_local
+    if (address.version in found or address.is_loopback or address.is_link_local
             or address.is_multicast or address.is_unspecified):
         raise SystemExit('download addresses: one unicast IPv4 and at most one IPv6 address')
-    downloads[address.version] = address
+    found[address.version] = address
+
+
+while rest[:1] in (['--download-address'], ['--host-json']) and len(rest) > 1:
+    if rest[0] == '--download-address':
+        add_download(rest[1], downloads)
+    elif host_json is None:
+        host_json = rest[1]
+    else:
+        raise SystemExit(USAGE)
     del rest[:2]
-if rest or (pending and role != 'mirror') or ((downloads or moved) and role != 'primary') or (moved and not downloads):
+if (rest or (pending and role != 'mirror') or ((downloads or moved or host_json) and role != 'primary')
+        or (moved and not downloads)):
     raise SystemExit(USAGE)
 if role not in {'primary', 'mirror', 'attestation'}:
     raise SystemExit('invalid role')
+
+
+def host_downloads(path, explicit):
+    """The download settings of host.json, None without the file or the field."""
+    try:
+        config = json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        if explicit:
+            raise SystemExit('host configuration not found: ' + path) from None
+        return None
+    except OSError:
+        raise SystemExit(f'cannot read {path}: run as root or pass --host-json') from None
+    except ValueError:
+        raise SystemExit(f'invalid host configuration: {path}') from None
+    if not isinstance(config, dict):
+        raise SystemExit(f'invalid host configuration: {path}')
+    values, found = config.get('download_addresses'), {}
+    host_moved = config.get('downloads_moved', False)
+    if type(host_moved) is not bool:
+        raise SystemExit('downloads_moved must be a boolean')
+    if 'download_addresses' not in config:
+        if host_moved:
+            raise SystemExit('downloads_moved needs download_addresses')
+        return None
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+        raise SystemExit('download_addresses must be a list of addresses')
+    for value in values:
+        add_download(value, found)
+    if host_moved and not found:
+        raise SystemExit('downloads_moved needs download_addresses')
+    return found, host_moved
+
+
+if role == 'primary':
+    settings = host_downloads(host_json or HOST_JSON, host_json is not None)
+    if settings is not None:
+        if (downloads or moved) and (downloads, moved) != settings:
+            raise SystemExit('the download options differ from host.json')
+        downloads, moved = settings
 
 
 def listen(address, port):
