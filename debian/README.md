@@ -82,6 +82,12 @@ Before that certificate exists, assemble with `--before-installer-certificate`
 so only the installer's HTTP server is live. Request the certificate, then
 assemble and install again without the option.
 
+`mta-sts.diamaneos.de` serves the MTA-STS policy for mail to diamaneos.de
+(`mta-sts/mta-sts.conf`, RFC 8461) with its own `diamaneos-mta-sts`
+certificate. Every other path answers 404. Its first certificate works the same
+way, with `--before-mta-sts-certificate`. A changed policy needs a new `id` in
+the `_mta-sts` TXT record.
+
 Primary downloads use `releases.diamaneos.de` and `apps.diamaneos.de`. The mirror
 uses `releases-na.diamaneos.de` and `apps-na.diamaneos.de`. Each host obtains its
 own ACME certificates and answers its own challenges. Use webroot renewal once

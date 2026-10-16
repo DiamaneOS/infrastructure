@@ -48,7 +48,7 @@ class DeploymentInputsTest(unittest.TestCase):
     def test_only_active_vhost_dependencies_are_copied(self):
         expected = {
             'primary': {'nginx.conf', 'mime.types', 'releases.conf', 'headers.conf', 'ads.conf', 'installer.conf',
-                        'installer-base.conf', 'installer-page.conf', 'installer-general.conf'},
+                        'installer-base.conf', 'installer-page.conf', 'installer-general.conf', 'mta-sts.conf'},
             'mirror': {'nginx.conf', 'mime.types', 'releases.conf', 'headers.conf', 'mirror.conf', 'ads.conf'},
             'attestation': {'nginx.conf', 'mime.types', 'service-state.conf', 'ads.conf'},
         }
@@ -98,7 +98,7 @@ class DeploymentInputsTest(unittest.TestCase):
 
     def test_primary_installer_site_and_its_first_certificate(self):
         self.assertEqual(self.assemble('primary', self.base / 'full').returncode, 0)
-        self.assertIn('include website[.]conf;\n    include installer.conf;', (self.base / 'full/nginx.conf').read_text())
+        self.assertIn('include website[.]conf;\n    include installer.conf;\n', (self.base / 'full/nginx.conf').read_text())
         for name in ('installer.conf', 'installer-base.conf', 'installer-page.conf', 'installer-general.conf'):
             self.assertEqual((ROOT / 'debian/installer' / name).read_text(), (self.base / 'full' / name).read_text())
         http, https = (self.base / 'full/installer.conf').read_text().split('\nserver {')[1:]
@@ -123,7 +123,36 @@ class DeploymentInputsTest(unittest.TestCase):
             self.assertNotEqual(self.assemble(role, self.base / 'refused', '--before-installer-certificate').returncode, 0)
             self.assertFalse((self.base / 'refused').exists())
         access = (ROOT / 'debian/nginx-cert-access').read_text()
-        self.assertIn(' diamaneos-installer diamaneos-staging-installer;', access)
+        self.assertIn(' diamaneos-installer diamaneos-staging-installer ', access)
+
+    def test_primary_mta_sts_policy_and_its_first_certificate(self):
+        self.assertEqual(self.assemble('primary', self.base / 'full').returncode, 0)
+        self.assertIn('include installer.conf;\n    include mta-sts.conf;\n', (self.base / 'full/nginx.conf').read_text())
+        full = (self.base / 'full/mta-sts.conf').read_text()
+        self.assertEqual((ROOT / 'debian/mta-sts/mta-sts.conf').read_text(), full)
+        http, https = full.split('\nserver {')[1:]
+        self.assertIn('location /.well-known/acme-challenge/ {\n        root /var/lib/letsencrypt/webroot;', http)
+        self.assertIn('location / { return 301 https://mta-sts.diamaneos.de$request_uri; }', http)
+        self.assertIn('ssl_certificate /etc/letsencrypt/live/diamaneos-mta-sts/fullchain.pem;', https)
+        self.assertIn('add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;', https)
+        # The policy and a 404 for every other path. Headers only at the server level, so every answer has them.
+        locations = re.findall(r'(?m)^    location ([^{]+)\{', https)
+        self.assertEqual(['= /.well-known/mta-sts.txt ', '/ '], locations)
+        self.assertEqual(https.count('add_header'), https.split('\n    location ')[0].count('add_header'))
+        self.assertIn('location / { return 404; }', https)
+        body = re.search(r'(?m)^        return 200 "([^"]*)";$', https)[1]
+        self.assertEqual('version: STSv1\nmode: testing\nmx: *.mailbox.org\nmax_age: 86400\n', body.replace('\\n', '\n'))
+        self.assertNotIn('$', body)
+        self.assertNotIn('ads.conf', full)
+
+        self.assertEqual(self.assemble('primary', self.base / 'pending', '--before-mta-sts-certificate').returncode, 0)
+        self.assertEqual(full[:full.rindex('\nserver {') + 1], (self.base / 'pending/mta-sts.conf').read_text())
+        self.assertEqual((self.base / 'full/installer.conf').read_text(), (self.base / 'pending/installer.conf').read_text())
+        for role in ('mirror', 'attestation'):
+            self.assertNotEqual(self.assemble(role, self.base / 'refused', '--before-mta-sts-certificate').returncode, 0)
+            self.assertFalse((self.base / 'refused').exists())
+        access = (ROOT / 'debian/nginx-cert-access').read_text()
+        self.assertIn(' diamaneos-mta-sts; do', access)
 
     def test_download_addresses_serve_only_the_download_names(self):
         (self.source / 'network/nginx/nginx.conf').write_text(
