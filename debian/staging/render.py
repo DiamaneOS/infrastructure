@@ -165,6 +165,26 @@ server {
         NOINDEX_HEADER
         try_files $uri =404;
     }
+    # The releases feed, as on the production website: Thunderbird reads feeds cross-origin.
+    location = /releases.atom {
+        if ($request_method !~ ^(?:GET|HEAD)$) { return 405; }
+        types { }
+        default_type application/atom+xml;
+        charset utf-8;
+        charset_types application/atom+xml;
+        add_header_inherit on;
+        add_header Content-Security-Policy "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "same-origin" always;
+        add_header Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), hid=(), magnetometer=(), microphone=(), payment=(), serial=(), usb=()" always;
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Resource-Policy "cross-origin" always;
+        add_header Cross-Origin-Embedder-Policy "require-corp" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        NOINDEX_HEADER
+        try_files $uri =404;
+    }
     # The short link the setup wizard shows, as on the production website.
     location ~* ^/ubl/?$ { return 301 /faq/#bootloader-locking-setup; }
     location ~ (^|/)\\. { return 404; }
