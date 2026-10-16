@@ -111,6 +111,9 @@ class DeploymentInputsTest(unittest.TestCase):
             self.assertIn('include installer-base.conf;', block)
             self.assertEqual(1, block.count('include installer-page.conf;') + block.count('include installer-general.conf;'))
         self.assertNotIn('ads.conf', http + https)
+        # The pages use a self-hosted font.
+        for name in ('installer-page.conf', 'installer-general.conf'):
+            self.assertIn("default-src 'none'; font-src 'self'; img-src", (self.base / 'full' / name).read_text())
 
         self.assertEqual(self.assemble('primary', self.base / 'pending', '--before-installer-certificate').returncode, 0)
         full = (self.base / 'full/installer.conf').read_text()
