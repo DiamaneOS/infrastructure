@@ -2,7 +2,7 @@
 
 Debian 13 adapters for DiamaneOS’s GrapheneOS-derived network, artifact and
 attestation services. These scripts configure hosts and sandbox existing
-services; they do not replace the upstream HTTP, SUPL or attestation protocols.
+services. They do not replace the upstream HTTP, SUPL or attestation protocols.
 
 ## Supported roles
 
@@ -28,13 +28,13 @@ these repositories.
 ```
 
 Staging exports committed configuration and records its source revisions.
-`host/host.example.json` describes the private `/etc/diamaneos/host.json` input;
-replace its deliberately invalid placeholders before use.
+`host/host.example.json` describes the private `/etc/diamaneos/host.json` input.
+Replace its deliberately invalid placeholders before use.
 
 ## Host and web setup
 
 Verify the host key and a fresh non-root key login first. `host/configure-host`
-prepares WireGuard; `host/apply` installs host policy with a timed firewall
+prepares WireGuard. `host/apply` installs host policy with a timed firewall
 rollback. Confirm a fresh connection before cancelling that rollback.
 
 SSH management is restricted to WireGuard. The client must support the
@@ -48,8 +48,8 @@ The final `zz-diamaneos.conf` drop-in overrides vendor `syslog.conf` and
 socket, rsyslog, syslog-ng and its discovered instances. These receivers must be
 stopped with no pending jobs or remaining conventional syslog daemon processes
 before restarting journald. Conflicts with the four checked journal settings or
-unsuccessful stops fail deployment. Existing persistent logs are preserved;
-inspect their metadata and handle any removal separately.
+unsuccessful stops fail deployment. Existing persistent logs are preserved.
+Inspect their metadata and handle any removal separately.
 These controls do not set retention for application state or package-manager logs.
 
 Install the staged infrastructure root-owned at `/opt/diamaneos-infrastructure`.
@@ -63,7 +63,7 @@ sudo ./debian/install-web-runtime ROLE
 ```
 
 Install the assembled configuration, then activate the role firewall and
-services. `install-nginx` requires nginx to be stopped; configuration changes retain a
+services. `install-nginx` requires nginx to be stopped. Configuration changes retain a
 rollback.
 
 Validate and reload nginx through its systemd unit, which runs as the serving
@@ -71,12 +71,12 @@ user. A bare root `nginx -t` can leave incorrectly owned PID/cache files.
 
 The primary configuration accepts an optional local `website.conf` include.
 Website content, its certificate and contact handler are supplied by the
-website deployment; this repository does not stage them.
+website deployment. This repository does not stage them.
 
 The primary also serves the web installer as `install.diamaneos.de` from
 `/srv/diamaneos-installer/current`, with its own `diamaneos-installer`
 certificate. `installer/` holds the server and the installer's header files.
-Until a release is published there, every path answers 404.
+When nothing is published there, every path answers 404.
 
 Before that certificate exists, assemble with `--before-installer-certificate`
 so only the installer's HTTP server is live. Request the certificate, then
@@ -88,7 +88,7 @@ certificate. Every other path answers 404. Its first certificate works the same
 way, with `--before-mta-sts-certificate`. A changed policy needs a new `id` in
 the `_mta-sts` TXT record.
 
-Primary downloads use `releases.diamaneos.de` and `apps.diamaneos.de`; the mirror
+Primary downloads use `releases.diamaneos.de` and `apps.diamaneos.de`. The mirror
 uses `releases-na.diamaneos.de` and `apps-na.diamaneos.de`. Each host obtains its
 own ACME certificates and answers its own challenges. Use webroot renewal once
 nginx occupies the HTTP port.
@@ -139,31 +139,31 @@ portable unit and `attestation-debian.conf`.
 
 The application requires its configured encrypted state mount. The service cannot
 create a plaintext fallback or administer its storage. SMTP destinations come from
-an external root-owned egress configuration; credentials remain in application state.
+an external root-owned egress configuration. Credentials remain in application state.
 Backups contain encrypted database state and matching filesystem metadata.
 
 Enrollment is controlled by `service-state.conf`. Attestation verifies the
 configured application signer and verified-boot key allowlists.
 
 Release and Apps tooling produces signed artifacts and catalogs separately
-from the serving hosts. Publication installs verified files in read-only roots;
-release-signing keys are excluded from serving hosts.
+from the serving hosts. Publication installs verified files in read-only roots.
+Release-signing keys are excluded from serving hosts.
 
 ## Security boundaries
 
 - Serving accounts cannot write code, configuration, publication data or ACME
   account keys. Nginx has only the low-port binding capability.
 - Service sandboxes and UID firewall rules restrict host IPC and outbound access.
-  Primary relays share nginx’s UID; attestation has a separate service account.
+  Primary relays share nginx’s UID. Attestation has a separate service account.
 - The role firewall allows each IPv4 address or IPv6 /64 32 connections to the
   web ports, and to SUPL on the primary. Further connections get a TCP reset.
   New connections above `nf_conntrack_max`/64 per second go through synproxy.
   Both follow GrapheneOS's network firewall, as do the conntrack and TCP timeouts.
 - Management WireGuard packets are not connection-tracked. `bandwidth_mbit` in
   `host.json` sets CAKE at 99.75 % of the provisioned rate.
-- Request logs are disabled. TLS-terminating relays process request payloads;
-  attestation retains account, device and verification-history state.
+- Request logs are disabled. TLS-terminating relays process request payloads.
+  Attestation retains account, device and verification-history state.
 - HTTPS time requires authenticated clock readiness. A watchdog failure removes
   its readiness marker and affects only the time endpoint.
 - The download hosts have fixed names and publication roots. Canonical DNS
-  resolves to primary; regional download names resolve to the mirror.
+  resolves to primary. Regional download names resolve to the mirror.
