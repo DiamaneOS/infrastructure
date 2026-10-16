@@ -52,6 +52,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn('Disallow: /', config)
         self.assertIn('X-Robots-Tag', (self.output / 'noindex.conf').read_text())
         self.assertIn('include noindex.conf;', (self.output / 'nginx.conf').read_text())
+        website = (self.output / 'mirror.conf').read_text().split('server_name staging.diamaneos.de;')[2]
+        self.assertIn('keepalive_requests 64;\n    keepalive_timeout 15s;', website.split('server {')[0])
 
     def test_staging_crawler_policy_merges_into_locations_without_duplicates(self):
         self.render()
@@ -68,7 +70,8 @@ class RenderTests(unittest.TestCase):
         text = (self.output / 'installer.conf').read_text()
         for line in ('server_name install.staging.diamaneos.de;', 'root /srv/diamaneos-staging/acme;',
                      'ssl_certificate_key /etc/letsencrypt/live/diamaneos-staging-installer/privkey.pem;',
-                     'root /srv/diamaneos-staging/installer/current;', 'include installer-page.conf;'):
+                     'root /srv/diamaneos-staging/installer/current;', 'include installer-page.conf;',
+                     'keepalive_timeout 15s;'):
             self.assertIn(line, text)
         self.assertTrue((self.output / 'installer-page.conf').is_file())
         self.assertIn('include mirror.conf;\n    include installer.conf;', (self.output / 'nginx.conf').read_text())
