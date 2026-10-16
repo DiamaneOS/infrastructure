@@ -188,7 +188,7 @@ def downloads_moved(config, downloads):
 
 
 def management_rules(config):
-    """Render the selected policy; any public fallback is explicit and bounded."""
+    """Render the selected policy. Any public fallback is explicit and bounded."""
     mode = config.get('management_mode', 'source-restricted')
     cidrs = config['management_cidrs']
     if mode not in ('source-restricted', 'key-only', 'wireguard'):
@@ -295,7 +295,7 @@ def configure_wireguard(settings, health, collector=None):
     active = subprocess.run(['systemctl', 'is-active', '--quiet', 'wg-quick@wg-mgmt.service']).returncode == 0
     if active and not unchanged:
         # Rebuild addresses and peer routes as well as keys. Routine deploys
-        # leave an unchanged tunnel up; topology changes briefly interrupt it.
+        # leave an unchanged tunnel up. Topology changes briefly interrupt it.
         subprocess.run(['systemctl', 'restart', 'wg-quick@wg-mgmt.service'], check=True)
     elif not active:
         subprocess.run(['systemctl', 'start', 'wg-quick@wg-mgmt.service'], check=True)
@@ -343,7 +343,7 @@ def main():
     if wireguard:
         configure_wireguard(wireguard, health, collector)
 
-    # Validated values only; no arbitrary configuration text is accepted.
+    # Validated values only. No arbitrary configuration text is accepted.
     # Without a health peer or collector the reporter's Match file is left as it is.
     write('/etc/diamaneos/management.nft', rules, 0o600)
     for path, text in sshd_files(admin, reporter_login(wireguard, health, collector)).items():

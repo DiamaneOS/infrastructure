@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Unprivileged logging-policy boundaries; no host service is changed."""
+"""Unprivileged logging-policy boundaries. No host service is changed."""
 import configparser
 import contextlib
 import ctypes
@@ -23,7 +23,7 @@ RECEIVERS = ('syslog.socket', 'rsyslog.service', 'syslog.service', 'syslog-ng.se
 
 
 class Manager:
-    """Service lifecycle fixture; masks block starts but do not stop live readers."""
+    """Service lifecycle fixture. Masks block starts but do not stop live readers."""
     def __init__(self, config=POLICY):
         self.config = config
         self.active = {unit: 'active' for unit in RECEIVERS}

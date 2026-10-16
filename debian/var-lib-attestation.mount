@@ -8,4 +8,4 @@ Where=/var/lib/attestation
 Type=ext4
 Options=nodev,nosuid,noexec
 
-# Disabled at boot; mounting requires an open LUKS mapper.
+# Disabled at boot. Mounting requires an open LUKS mapper.

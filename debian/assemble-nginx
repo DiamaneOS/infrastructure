@@ -162,7 +162,7 @@ if role == 'primary':
         files['nginx.conf'] = download_supl(files['nginx.conf'])
 if role == 'mirror':
     # Reuse the artifact handlers on fixed regional names. Each host answers
-    # its own ACME challenges; client fallback does not change shared DNS.
+    # its own ACME challenges. Client fallback does not change shared DNS.
     files['nginx.conf'] = files['nginx.conf'].replace(
         'include releases.conf;', 'include releases.conf;\n    include mirror.conf;')
     files['mirror.conf'] = '''server {

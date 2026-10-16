@@ -24,7 +24,7 @@ system_user() {
 
 # Package post-install scripts must not expose a default web server before its
 # privacy policy, virtual hosts and firewall are installed. Respect an existing
-# start policy; otherwise inhibit starts just for this operation.
+# start policy. Otherwise inhibit starts just for this operation.
 apt_install() (
   if [ ! -e /usr/sbin/policy-rc.d ]; then
     printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
