@@ -82,11 +82,23 @@ The primary's download names can have their own address, so a flood on them
 leaves the other services' address alone. List it in `download_addresses` in
 `host.json` (one IPv4 and at most one IPv6 address). `configure-host` adds it to
 the interface and a networkd drop-in, without reconfiguring the link. An empty
-list removes them. Without the field they are left as they are. Pass the
-same addresses to `assemble-nginx primary` as `--download-address`: releases and
-apps then also answer there, and every other name and SUPL closes the connection
-there. Once DNS points the download names at their address, add
-`--downloads-moved`, so they no longer answer on the shared address of that family.
+list removes them. Without the field they are left as they are.
+`assemble-nginx primary` reads the same field from `/etc/diamaneos/host.json`
+(run it as root, or pass `--host-json PATH`): releases and apps then also answer
+there, and every other name and SUPL closes the connection there. Once DNS points
+the download names at their address, set `downloads_moved` to `true`, so they no
+longer answer on the shared address of that family. `--download-address` and
+`--downloads-moved` give the same settings without host.json and must agree with it.
+
+A monitoring host's health collector can reach a host over WireGuard as a
+restricted peer. `health_peer` in `host.json` lists its `name`, `public_key`,
+tunnel `address`, the `tcp_ports` it may reach and the `reporter` account it may
+log in as. `configure-host` adds the peer to `wg-mgmt.conf`, a rule for those
+ports to the management firewall, the account to `AllowUsers`, and
+`sshd_config.d/01-diamaneos-health.conf`: from the peer's address only the
+reporter may log in, with a forced command and no forwarding. The reporter
+account and its key restriction come from the monitoring deployment. Without
+the field the reporter's SSH file is left as it is.
 
 The mirror also serves the unlisted `status.diamaneos.de` from
 `/var/lib/diamaneos-status-page`. A separate monitoring deployment writes that

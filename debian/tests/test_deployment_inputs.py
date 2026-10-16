@@ -2,6 +2,7 @@
 import importlib.machinery
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import runpy
@@ -141,6 +142,59 @@ class DeploymentInputsTest(unittest.TestCase):
         (self.source / 'releases/nginx/releases.conf').write_text('server {\n server_name releases.diamaneos.de;\n}\n')
         self.assertNotEqual(self.assemble('primary', self.base / 'refused', '--download-address', v4).returncode, 0)
         self.assertFalse((self.base / 'refused').exists())
+
+    def test_download_settings_come_from_host_json(self):
+        (self.source / 'network/nginx/nginx.conf').write_text(
+            'http {\n    include releases[.]conf;\n}\n\nstream {\n    server {\n        listen 7275;\n    }\n}\n')
+        (self.source / 'releases/nginx/releases.conf').write_text(
+            'server {\n    listen 443 ssl;\n    listen [::]:443 ssl;\n    server_name releases.diamaneos.de;\n}\n')
+        v4, v6 = '203.0.113.7', '2001:db8::7'
+        host_json = self.base / 'host.json'
+
+        def files(name, host=None, *options):
+            if host is not None:
+                host_json.write_text(json.dumps(host))
+                options = ('--host-json', str(host_json), *options)
+            result = self.assemble('primary', self.base / name, *options)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return {path.name: path.read_bytes() for path in (self.base / name).iterdir()}
+
+        moved = files('moved', None, '--download-address', v4, '--downloads-moved')
+        self.assertEqual(moved, files('host-moved', {'download_addresses': [v4], 'downloads_moved': True}))
+        self.assertEqual(files('added', None, '--download-address', v4, '--download-address', v6),
+                         files('host-added', {'download_addresses': [v4, v6]}))
+        self.assertEqual(files('plain'), files('host-plain', {'hostname': 'server.example.org'}))
+        # The options still work, and must agree with host.json.
+        self.assertEqual(moved, files('both', {'download_addresses': [v4], 'downloads_moved': True},
+                                      '--downloads-moved', '--download-address', v4))
+        refusals = {'moved differs': ({'download_addresses': [v4]}, '--download-address', v4, '--downloads-moved'),
+                    'address differs': ({'download_addresses': [v4]}, '--download-address', '198.51.100.1'),
+                    'empty list': ({'download_addresses': []}, '--download-address', v4),
+                    'moved without addresses': ({'downloads_moved': True},),
+                    'moved with an empty list': ({'download_addresses': [], 'downloads_moved': True},),
+                    'moved not a boolean': ({'download_addresses': [v4], 'downloads_moved': 'yes'},),
+                    'addresses not a list': ({'download_addresses': v4},),
+                    'two IPv4': ({'download_addresses': [v4, '198.51.100.1']},),
+                    'not an object': ([v4],)}
+        for name, (host, *options) in refusals.items():
+            with self.subTest(name):
+                host_json.write_text(json.dumps(host))
+                result = self.assemble('primary', self.base / 'refused', '--host-json', str(host_json), *options)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((self.base / 'refused').exists())
+        host_json.write_text('{}')
+        for name, (role, *options) in {'missing file': ('primary', '--host-json', str(self.base / 'missing.json')),
+                                       'mirror role': ('mirror', '--host-json', str(host_json)),
+                                       'twice': ('primary', '--host-json', str(host_json), '--host-json', str(host_json)),
+                                       'no value': ('primary', '--host-json')}.items():
+            with self.subTest(name):
+                self.assertNotEqual(self.assemble(role, self.base / 'refused', *options).returncode, 0)
+                self.assertFalse((self.base / 'refused').exists())
+        if os.geteuid() != 0:
+            host_json.chmod(0)
+            result = self.assemble('primary', self.base / 'refused', '--host-json', str(host_json))
+            self.assertIn('run as root', result.stderr)
+            self.assertFalse((self.base / 'refused').exists())
 
     def test_host_download_addresses(self):
         loader = importlib.machinery.SourceFileLoader('configure_host', str(ROOT / 'debian/host/configure-host'))
