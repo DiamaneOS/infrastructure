@@ -94,6 +94,19 @@ class RenderTests(unittest.TestCase):
                        'X-Robots-Tag "noindex, nofollow, noarchive"'):
             self.assertIn('add_header ' + header + ' always;', keys)
 
+    def test_releases_feed_as_on_the_production_website(self):
+        self.render()
+        website = (self.output / 'mirror.conf').read_text().split('server_name staging.diamaneos.de;')[2]
+        feed = website.split('location = /releases.atom {\n')[1].split('\n    }\n')[0]
+        self.assertTrue(feed.lstrip().startswith('if ($request_method !~ ^(?:GET|HEAD)$) { return 405; }'))
+        self.assertIn('types { }\n        default_type application/atom+xml;\n        charset utf-8;\n'
+                      '        charset_types application/atom+xml;\n        add_header_inherit on;', feed)
+        self.assertEqual(10, feed.count('add_header '))
+        self.assertIn('add_header Cross-Origin-Resource-Policy "cross-origin" always;', feed)
+        self.assertIn('add_header X-Robots-Tag "noindex, nofollow, noarchive" always;', feed)
+        self.assertNotIn('Access-Control-Allow-Origin', feed)
+        self.assertTrue(feed.endswith('try_files $uri =404;'))
+
     def test_website_serves_the_installer_with_its_own_headers(self):
         self.render()
         self.assertNotIn('install.staging', '\n'.join(p.read_text() for p in self.output.glob('*.conf')))
