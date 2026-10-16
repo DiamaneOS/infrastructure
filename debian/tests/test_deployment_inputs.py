@@ -111,6 +111,9 @@ class DeploymentInputsTest(unittest.TestCase):
             self.assertIn('include installer-base.conf;', block)
             self.assertEqual(1, block.count('include installer-page.conf;') + block.count('include installer-general.conf;'))
         self.assertNotIn('ads.conf', http + https)
+        # One HTTP/2 connection serves the page and its modules: the http block has keepalive_timeout 0.
+        self.assertIn('    keepalive_requests 64;\n    keepalive_timeout 15s;\n', https)
+        self.assertNotIn('keepalive', http)
         # The pages use a self-hosted font.
         for name in ('installer-page.conf', 'installer-general.conf'):
             self.assertIn("default-src 'none'; font-src 'self'; img-src", (self.base / 'full' / name).read_text())

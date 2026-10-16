@@ -118,6 +118,9 @@ server {
     absolute_redirect off; autoindex off;
     disable_symlinks on from=$document_root;
     access_log off;
+    # As on the production website: one HTTP/2 connection for a page and its files.
+    keepalive_requests 64;
+    keepalive_timeout 15s;
     include website-headers.conf;
     location = /contact/submit { return 503; }
     location = /robots.txt { default_type text/plain; return 200 "User-agent: *\\nDisallow: /\\n"; }
