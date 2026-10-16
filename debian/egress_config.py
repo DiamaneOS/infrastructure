@@ -10,6 +10,8 @@ import stat
 HOSTNAME = re.compile(r'^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$')
 DEFAULT_CONFIG = Path('/etc/diamaneos/egress-services.json')
 MAX_CONFIG_BYTES = 16 * 1024
+# The mirror's monitor lists every host name it checks.
+MAX_HOSTNAMES = 32
 
 
 def unique(pairs):
@@ -43,7 +45,7 @@ def load_destinations(path=DEFAULT_CONFIG, *, uid=0):
         if type(port) is not int or port not in ({465, 587} if name == 'smtp' else {443}):
             raise ValueError('unsupported service destination port')
         hosts = entry['hostnames']
-        if not isinstance(hosts, list) or not 1 <= len(hosts) <= 16 or not all(isinstance(host, str) for host in hosts):
+        if not isinstance(hosts, list) or not 1 <= len(hosts) <= MAX_HOSTNAMES or not all(isinstance(host, str) for host in hosts):
             raise ValueError('invalid service destination count')
         if len(set(hosts)) != len(hosts) or not all(HOSTNAME.fullmatch(host) for host in hosts):
             raise ValueError('invalid service destination hostname')
