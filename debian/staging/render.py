@@ -81,9 +81,8 @@ def rewrite(text):
             value = '301 https://staging.diamaneos.de/releases'
         return indent + kind + ' ' + value + ';'
     return DIRECTIVE.sub(directive, text)
-def validate(files, role, attestation=False):
-    web = {'staging.diamaneos.de', 'releases.staging.diamaneos.de', 'apps.staging.diamaneos.de'}
-    allowed = web | ({'attestation.staging.diamaneos.de'} if attestation else set()) if role == 'web' else {'attestation.staging.diamaneos.de'}
+def validate(files, role):
+    allowed = {'staging.diamaneos.de', 'releases.staging.diamaneos.de', 'apps.staging.diamaneos.de', 'attestation.staging.diamaneos.de'} if role == 'web' else {'attestation.staging.diamaneos.de'}
     for name, text in files.items():
         if not name.endswith('.conf'):
             continue
@@ -142,11 +141,10 @@ server {
     CLOSED_RESPONSE
 }
 '''
-def render(role, source, output, website_headers=None, attestation=False):
+def render(role, source, output, website_headers=None):
     source, output = Path(source), Path(output)
     require(source.resolve() == source, 'Symlinked source root is unsupported')
     require(role in ('web', 'attestation-disabled'), 'Unsupported staging role')
-    require(role == 'web' or not attestation, 'Only the web configuration adds the attestation frontend')
     require(not output.exists() and not output.is_symlink() and output.parent.resolve() == output.parent,
             'Output must be a fresh path without symlink ancestors')
     base_role = 'mirror' if role == 'web' else 'attestation'
@@ -168,14 +166,11 @@ def render(role, source, output, website_headers=None, attestation=False):
                     for line in headers.splitlines()), 'Unsupported website header directives')
         require('Content-Security-Policy' in headers and 'X-Content-Type-Options' in headers,
                 'Website security headers are missing')
-        files['mirror.conf'] = WEBSITE
-        # The closed attestation frontend is rendered only on request.
-        if attestation:
-            state = read(source / 'attestation/nginx/service-state.conf', 16384)
-            closed = re.findall(r'(?m)^\s*(return 503 "[^"\n]+";)', state)
-            require(len(closed) == 1, 'Explicit closed attestation response is required')
-            files['mirror.conf'] += CLOSED.replace('CLOSED_RESPONSE', closed[0])
-            inputs['closed-attestation-state'] = hashlib.sha256(state.encode()).hexdigest()
+        state = read(source / 'attestation/nginx/service-state.conf', 16384)
+        closed = re.findall(r'(?m)^\s*(return 503 "[^"\n]+";)', state)
+        require(len(closed) == 1, 'Explicit closed attestation response is required')
+        files['mirror.conf'] = WEBSITE + CLOSED.replace('CLOSED_RESPONSE', closed[0])
+        inputs['closed-attestation-state'] = hashlib.sha256(state.encode()).hexdigest()
         files['website-headers.conf'] = headers
         inputs['website-headers.conf'] = hashlib.sha256(headers.encode()).hexdigest()
     else:
@@ -192,7 +187,7 @@ def render(role, source, output, website_headers=None, attestation=False):
                              'add_header X-Robots-Tag "noindex, nofollow, noarchive" always;\n')
     require(files['nginx.conf'].count('http {') == 1, 'Explicit HTTP context is required')
     files['nginx.conf'] = files['nginx.conf'].replace('http {', 'http {\n    include noindex.conf;')
-    validate(files, role, attestation)
+    validate(files, role)
     output.mkdir(mode=0o755)
     for name, text in sorted(files.items()):
         with (output / name).open('x') as stream:
@@ -207,8 +202,6 @@ def main():
     parser.add_argument('role', choices=('web', 'attestation-disabled'))
     parser.add_argument('source', type=Path); parser.add_argument('output', type=Path)
     parser.add_argument('--website-headers', type=Path)
-    parser.add_argument('--with-attestation', action='store_true',
-                        help='also render the closed attestation.staging.diamaneos.de frontend (web only)')
-    args = parser.parse_args(); render(args.role, args.source, args.output, args.website_headers, args.with_attestation)
+    args = parser.parse_args(); render(args.role, args.source, args.output, args.website_headers)
 if __name__ == '__main__':
     main()

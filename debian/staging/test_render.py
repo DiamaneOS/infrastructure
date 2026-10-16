@@ -34,8 +34,8 @@ class RenderTests(unittest.TestCase):
         self.headers.write_text('add_header Content-Security-Policy "default-src none";\nadd_header X-Content-Type-Options nosniff;\n')
         self.output = self.root / 'output'
 
-    def render(self, role='web', attestation=False):
-        renderer.render(role, self.source, self.output, self.headers, attestation)
+    def render(self, role='web'):
+        renderer.render(role, self.source, self.output, self.headers)
 
     def test_web_reuses_artifact_handlers_and_adds_only_static_website(self):
         self.render()
@@ -48,8 +48,7 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn('/srv/apps.diamaneos.de_a', config)
         self.assertIn('/srv/diamaneos-staging/apps/current', config)
         self.assertIn('/etc/letsencrypt/live/diamaneos-staging/', config)
-        self.assertNotIn('attestation', (self.output / 'mirror.conf').read_text())
-        self.assertNotIn('attestation.staging.diamaneos.de', config)
+        self.assertIn('attestation.staging.diamaneos.de', config)
         self.assertIn('Disallow: /', config)
         self.assertIn('X-Robots-Tag', (self.output / 'noindex.conf').read_text())
         self.assertIn('include noindex.conf;', (self.output / 'nginx.conf').read_text())
@@ -61,15 +60,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn('add_header_inherit merge;',text)
         self.assertIn('include noindex.conf;',text)
         self.assertIn('Disallow: /',text)
+        self.assertIn('attestation.staging.diamaneos.de',text)
         self.assertNotIn('proxy_pass',text)
-
-    def test_closed_attestation_frontend_only_on_request(self):
-        self.render(attestation=True)
-        text = (self.output / 'mirror.conf').read_text()
-        self.assertEqual(2, text.count('server_name attestation.staging.diamaneos.de;'))
-        self.assertEqual(2, text.count('return 503 "DiamaneOS attestation enrollment is closed.\\n";'))
-        shutil.rmtree(self.output)
-        with self.assertRaises(ValueError): self.render('attestation-disabled', attestation=True)
 
     def test_attestation_is_separate_loopback_and_closed(self):
         self.render('attestation-disabled')
