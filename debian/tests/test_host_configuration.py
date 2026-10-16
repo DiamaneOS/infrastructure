@@ -18,6 +18,10 @@ WIREGUARD = {'listen_port': 51000, 'address': '172.31.255.1/32',
              'peers': [{'address': '172.31.255.2/32', 'public_key': KEYS[0]}]}
 HEALTH = {'name': 'monitor', 'public_key': KEYS[1], 'address': '172.31.255.3/32',
           'tcp_ports': [22], 'reporter': 'health-reporter'}
+COLLECTOR = {'reporter': 'health-reporter', 'peers': [
+    {'name': 'primary', 'public_key': KEYS[1], 'address': '172.31.255.3/32', 'endpoint': '203.0.113.3:51000', 'keepalive': 25},
+    {'name': 'attestation', 'public_key': KEYS[2], 'address': '172.31.255.4/32', 'endpoint': '[2001:db8::4]:51000',
+     'keepalive': 25}]}
 CONFIG = {'hostname': 'server.example.org', 'admin_user': 'admin', 'management_mode': 'wireguard',
           'management_cidrs': [], 'interface': 'eth0', 'network_file': '10-eth0.network',
           'bandwidth_mbit': None, 'wireguard': WIREGUARD}
@@ -68,6 +72,8 @@ class HostConfigurationTest(unittest.TestCase):
         config = self.config()
         settings = self.host.wireguard_settings(config)
         self.assertIsNone(self.host.health_peer(config, settings))
+        self.assertIsNone(self.host.health_collector(config, settings))
+        self.assertIsNone(self.host.reporter_login(settings, None, None))
         self.assertEqual(RULES, self.host.management_rules(config))
         self.assertEqual(TUNNEL, self.host.wireguard_text(settings, 'PRIVATE'))
         self.assertEqual({'/etc/ssh/sshd_config.d/00-diamaneos-admin.conf': 'AllowUsers admin\n'},
@@ -85,7 +91,7 @@ class HostConfigurationTest(unittest.TestCase):
                          'AllowedIPs = 172.31.255.3/32\n', self.host.wireguard_text(settings, 'PRIVATE', health))
         self.assertEqual({'/etc/ssh/sshd_config.d/00-diamaneos-admin.conf': 'AllowUsers admin health-reporter\n',
                           '/etc/ssh/sshd_config.d/01-diamaneos-health.conf': REPORTER},
-                         self.host.sshd_files('admin', health))
+                         self.host.sshd_files('admin', self.host.reporter_login(settings, health, None)))
         config['health_peer']['tcp_ports'] = [22, 9100]
         self.assertIn('ip saddr 172.31.255.3 tcp dport { 22, 9100 } ct state new accept\n',
                       self.host.management_rules(config))
@@ -109,7 +115,50 @@ class HostConfigurationTest(unittest.TestCase):
                 self.host.management_rules(config)
         config = self.config(management_mode='key-only', health_peer=HEALTH)
         del config['wireguard']
-        with self.assertRaisesRegex(ValueError, 'health peer require'):
+        with self.assertRaisesRegex(ValueError, 'health peers require'):
+            self.host.management_rules(config)
+
+    def test_collector_dials_its_peers_and_checks_itself(self):
+        config = self.config(health_collector=COLLECTOR)
+        settings = self.host.wireguard_settings(config)
+        collector = self.host.health_collector(config, settings)
+        # Only replies come back from the peers: no firewall rule for them.
+        self.assertEqual(RULES, self.host.management_rules(config))
+        self.assertEqual(TUNNEL + f'\n# Restricted host-health peer: primary\n[Peer]\nPublicKey = {KEYS[1]}\n'
+                         'AllowedIPs = 172.31.255.3/32\nEndpoint = 203.0.113.3:51000\nPersistentKeepalive = 25\n'
+                         f'\n# Restricted host-health peer: attestation\n[Peer]\nPublicKey = {KEYS[2]}\n'
+                         'AllowedIPs = 172.31.255.4/32\nEndpoint = [2001:db8::4]:51000\nPersistentKeepalive = 25\n',
+                         self.host.wireguard_text(settings, 'PRIVATE', None, collector))
+        self.assertEqual({'/etc/ssh/sshd_config.d/00-diamaneos-admin.conf': 'AllowUsers admin health-reporter\n',
+                          '/etc/ssh/sshd_config.d/01-diamaneos-health.conf':
+                          REPORTER.replace('Match Address 172.31.255.3', 'Match Address 172.31.255.1')},
+                         self.host.sshd_files('admin', self.host.reporter_login(settings, None, collector)))
+
+    def test_invalid_collectors_are_refused(self):
+        def peer(**change):
+            return {**COLLECTOR['peers'][0], **change}
+        changes = {'no peers': {'peers': []}, 'peers not a list': {'peers': peer()},
+                   'extra field': {'reporter': 'health-reporter', 'peers': [peer()], 'ports': [22]},
+                   'missing endpoint': {'peers': [{k: v for k, v in peer().items() if k != 'endpoint'}]},
+                   'tcp ports': {'peers': [peer(tcp_ports=[22])]}, 'endpoint without port': {'peers': [peer(endpoint='203.0.113.3')]},
+                   'loopback endpoint': {'peers': [peer(endpoint='127.0.0.1:51000')]},
+                   'bare IPv6 endpoint': {'peers': [peer(endpoint='2001:db8::4:51000')]},
+                   'keepalive zero': {'peers': [peer(keepalive=0)]}, 'keepalive text': {'peers': [peer(keepalive='25')]},
+                   'same name': {'peers': [peer(), peer(public_key=KEYS[2], address='172.31.255.4/32')]},
+                   'same address': {'peers': [peer(), peer(name='attestation', public_key=KEYS[2])]},
+                   'same key': {'peers': [peer(), peer(name='attestation', address='172.31.255.4/32')]},
+                   'own address': {'peers': [peer(address='172.31.255.1/32')]},
+                   'admin peer key': {'peers': [peer(public_key=KEYS[0])]}, 'admin reporter': {'reporter': 'admin'}}
+        for name, change in changes.items():
+            config = self.config(health_collector={**COLLECTOR, **change})
+            with self.subTest(name), self.assertRaises(ValueError):
+                self.host.health_collector(config, self.host.wireguard_settings(config))
+        config = self.config(health_collector=COLLECTOR, health_peer=HEALTH)
+        with self.assertRaisesRegex(ValueError, 'not both'):
+            self.host.health_collector(config, self.host.wireguard_settings(config))
+        config = self.config(management_mode='key-only', health_collector=COLLECTOR)
+        del config['wireguard']
+        with self.assertRaisesRegex(ValueError, 'health peers require'):
             self.host.management_rules(config)
 
     def test_downloads_moved_needs_download_addresses(self):
@@ -120,24 +169,26 @@ class HostConfigurationTest(unittest.TestCase):
             with self.subTest(config=config, downloads=downloads), self.assertRaises(ValueError):
                 self.host.downloads_moved(config, downloads)
 
-    def test_main_writes_the_reporter_files_only_with_a_health_peer(self):
-        for health in (None, HEALTH):
-            with self.subTest(health=health is not None), tempfile.TemporaryDirectory() as temp:
+    def test_main_writes_the_reporter_files_only_with_a_health_peer_or_collector(self):
+        for field, value in ((None, None), ('health_peer', HEALTH), ('health_collector', COLLECTOR)):
+            with self.subTest(field), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
                 config = self.config(download_addresses=['203.0.113.7'], downloads_moved=True)
-                if health:
-                    config['health_peer'] = health
+                if field:
+                    config[field] = value
                 _, tunnels = self.run_main(root, config)
+                settings = self.host.wireguard_settings(config)
+                health, collector = self.host.health_peer(config, settings), self.host.health_collector(config, settings)
                 sshd = root / 'etc/ssh/sshd_config.d'
-                self.assertEqual(self.host.sshd_files('admin', self.host.health_peer(config, self.host.wireguard_settings(config))),
+                self.assertEqual(self.host.sshd_files('admin', self.host.reporter_login(settings, health, collector)),
                                  {'/' + str(path.relative_to(root)): path.read_text()
-                                  for path in sshd.iterdir() if path.name != '01-diamaneos-health.conf' or health})
-                # Without the field a hand-made reporter file is left as it is.
-                self.assertEqual('kept\n' if not health else REPORTER, (sshd / '01-diamaneos-health.conf').read_text())
+                                  for path in sshd.iterdir() if path.name != '01-diamaneos-health.conf' or field})
+                # Without either field a hand-made reporter file is left as it is.
+                if not field:
+                    self.assertEqual('kept\n', (sshd / '01-diamaneos-health.conf').read_text())
                 self.assertEqual(self.host.management_rules(config), (root / 'etc/diamaneos/management.nft').read_text())
                 self.assertEqual(0o600, (root / 'etc/diamaneos/management.nft').stat().st_mode & 0o777)
-                self.assertEqual([self.host.health_peer(config, self.host.wireguard_settings(config))],
-                                 [call[1] for call in tunnels])
+                self.assertEqual([(settings, health, collector)], tunnels)
                 self.assertEqual('[Address]\nAddress=203.0.113.7/32\n',
                                  (root / 'etc/systemd/network/10-eth0.network.d/60-diamaneos-addresses.conf').read_text())
         with tempfile.TemporaryDirectory() as temp, self.assertRaises(SystemExit):
