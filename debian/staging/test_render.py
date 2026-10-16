@@ -58,12 +58,35 @@ class RenderTests(unittest.TestCase):
     def test_staging_crawler_policy_merges_into_locations_without_duplicates(self):
         self.render()
         text='\n'.join(p.read_text() for p in self.output.glob('*.conf'))
-        self.assertEqual(1,text.count('add_header X-Robots-Tag'))
+        # noindex.conf, and each location that does not merge repeats it.
+        self.assertEqual(1+text.count('add_header_inherit on;'),text.count('add_header X-Robots-Tag'))
+        self.assertNotIn('NOINDEX_HEADER',text)
         self.assertIn('add_header_inherit merge;',text)
         self.assertIn('include noindex.conf;',text)
         self.assertIn('Disallow: /',text)
         self.assertIn('attestation.staging.diamaneos.de',text)
         self.assertNotIn('proxy_pass',text)
+
+    def test_security_contact_files_as_on_the_production_website(self):
+        self.render()
+        website = (self.output / 'mirror.conf').read_text().split('server_name staging.diamaneos.de;')[2]
+        blocks = {}
+        for location, kind in (('= /.well-known/security.txt', 'text/plain'), ('= /security-public.asc', 'application/pgp-keys'),
+                               ('= /security-public.pgp', 'application/pgp-keys'),
+                               ('^~ /.well-known/openpgpkey/', 'application/octet-stream')):
+            block = blocks[location] = website.split('location ' + location + ' {\n')[1].split('\n    }\n')[0]
+            self.assertTrue(block.lstrip().startswith('if ($request_method !~ ^(?:GET|HEAD)$) { return 405; }'))
+            self.assertIn('types { }\n        default_type ' + kind + ';', block)
+            self.assertTrue(block.endswith('try_files $uri =404;'))
+        self.assertIn('charset utf-8;', blocks['= /.well-known/security.txt'])
+        keys = blocks['^~ /.well-known/openpgpkey/']
+        self.assertIn('(?:policy|hu/t5s8ztdbon8yzntexy6oz5y48etqsnbb)$) { return 404; }', keys)
+        self.assertIn('add_header_inherit on;', keys)
+        self.assertEqual(11, keys.count('add_header '))
+        for header in ('Cross-Origin-Resource-Policy "cross-origin"', 'Access-Control-Allow-Origin "*"',
+                       'Strict-Transport-Security "max-age=31536000; includeSubDomains"',
+                       'X-Robots-Tag "noindex, nofollow, noarchive"'):
+            self.assertIn('add_header ' + header + ' always;', keys)
 
     def test_installer_site_uses_staging_names_and_its_own_lineage(self):
         self.render()
