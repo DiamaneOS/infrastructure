@@ -10,9 +10,10 @@ import re
 import sys
 
 USAGE = ('usage: assemble-nginx primary|mirror|attestation SOURCE_ROOT OUTPUT [--before-status-certificate]'
-         ' [--host-json PATH] [--download-address ADDRESS]... [--downloads-moved]')
+         ' [--before-installer-certificate] [--host-json PATH] [--download-address ADDRESS]... [--downloads-moved]')
 DOWNLOAD_NAMES = {'releases.diamaneos.de', 'apps.diamaneos.de'}
 HOST_JSON = '/etc/diamaneos/host.json'
+INSTALLER = Path(__file__).resolve().parent / 'installer'
 if len(sys.argv) < 4:
     raise SystemExit(USAGE)
 role, source, output = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
@@ -20,13 +21,16 @@ options = sys.argv[4:]
 # nginx refuses to start without a certificate, so the first status certificate
 # is requested while only the status page's HTTP server is live.
 pending = '--before-status-certificate' in options
+# Likewise the primary's installer site: its HTTP server answers the challenge first.
+installer_pending = '--before-installer-certificate' in options
 # The primary's download names can have their own addresses (host.json download_addresses).
 # Moved: they no longer answer on the shared address of that family, once DNS points at theirs
 # (host.json downloads_moved). The options give the same settings without host.json.
 moved = '--downloads-moved' in options
 downloads = {}
 host_json = None
-rest = [option for option in options if option not in ('--before-status-certificate', '--downloads-moved')]
+rest = [option for option in options
+        if option not in ('--before-status-certificate', '--before-installer-certificate', '--downloads-moved')]
 
 
 def add_download(value, found):
@@ -48,7 +52,8 @@ while rest[:1] in (['--download-address'], ['--host-json']) and len(rest) > 1:
     else:
         raise SystemExit(USAGE)
     del rest[:2]
-if (rest or (pending and role != 'mirror') or ((downloads or moved or host_json) and role != 'primary')
+if (rest or (pending and role != 'mirror')
+        or ((downloads or moved or host_json or installer_pending) and role != 'primary')
         or (moved and not downloads)):
     raise SystemExit(USAGE)
 if role not in {'primary', 'mirror', 'attestation'}:
@@ -145,7 +150,7 @@ for root in roots:
 if role == 'primary':
     files['nginx.conf'] = (source / 'network/nginx/nginx.conf').read_text()
     files['nginx.conf'] = files['nginx.conf'].replace(
-        'include releases[.]conf;', 'include releases[.]conf;\n    include website[.]conf;')
+        'include releases[.]conf;', 'include releases[.]conf;\n    include website[.]conf;\n    include installer.conf;')
     if downloads:
         files['releases.conf'] = download_vhosts(files['releases.conf'])
         files['nginx.conf'] = download_supl(files['nginx.conf'])
@@ -219,6 +224,12 @@ if role == 'mirror':
     location / { return 404; }
 }
 '''
+if role == 'primary':
+    # Added after the ads.conf includes: the installer site serves only its own files.
+    files.update((path.name, path.read_text()) for path in INSTALLER.iterdir() if path.suffix == '.conf')
+    if installer_pending:
+        blocks = re.split(r'(?m)^(?=server \{)', files['installer.conf'])
+        files['installer.conf'] = ''.join(block for block in blocks if not re.search(r'(?m)^\s*listen [^;]*443', block))
 files['ads.conf'] = '''location = /ads.txt {
     default_type text/plain;
     return 200 "placeholder.example.com, placeholder, DIRECT, placeholder\\n";
