@@ -21,6 +21,8 @@ disabled, and unknown hosts retain the inherited refusal behavior.
 from `/srv/diamaneos-staging/installer/current`, with its own
 `diamaneos-staging-installer` certificate lineage. Before that certificate exists,
 render with `--before-installer-certificate` so only its HTTP server is live.
+The installer page keeps `connect-src https://releases.diamaneos.de`, the one
+production reference allowed, because the page downloads releases from there.
 
 All other names use the `diamaneos-staging` certificate lineage. HTTP serves challenges
 from `/srv/diamaneos-staging/acme`. The renderer writes only a fresh local output

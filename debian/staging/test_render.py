@@ -96,7 +96,10 @@ class RenderTests(unittest.TestCase):
                      'root /srv/diamaneos-staging/installer/current;', 'include installer-page.conf;',
                      'keepalive_timeout 15s;'):
             self.assertIn(line, text)
-        self.assertTrue((self.output / 'installer-page.conf').is_file())
+        self.assertIn('connect-src https://releases.diamaneos.de;', (self.output / 'installer-page.conf').read_text())
+        for name, policy in (('installer-page.conf', 'connect-src https://releases.diamaneos.de; img-src https://diamaneos.de;'),
+                             ('installer-general.conf', 'connect-src https://releases.diamaneos.de;')):
+            with self.assertRaises(ValueError): renderer.validate({name: policy}, 'web')
         self.assertIn('include mirror.conf;\n    include installer.conf;', (self.output / 'nginx.conf').read_text())
         shutil.rmtree(self.output)
         renderer.render('web', self.source, self.output, self.headers, installer_pending=True)
