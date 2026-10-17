@@ -47,8 +47,7 @@ class DeploymentInputsTest(unittest.TestCase):
 
     def test_only_active_vhost_dependencies_are_copied(self):
         expected = {
-            'primary': {'nginx.conf', 'mime.types', 'releases.conf', 'headers.conf', 'ads.conf', 'installer.conf',
-                        'installer-base.conf', 'installer-page.conf', 'installer-general.conf', 'mta-sts.conf'},
+            'primary': {'nginx.conf', 'mime.types', 'releases.conf', 'headers.conf', 'ads.conf', 'mta-sts.conf'},
             'mirror': {'nginx.conf', 'mime.types', 'releases.conf', 'headers.conf', 'mirror.conf', 'ads.conf'},
             'attestation': {'nginx.conf', 'mime.types', 'service-state.conf', 'ads.conf'},
         }
@@ -96,43 +95,9 @@ class DeploymentInputsTest(unittest.TestCase):
         self.assertNotEqual(refused.returncode, 0)
         self.assertFalse((self.base / 'refused').exists())
 
-    def test_primary_installer_site_and_its_first_certificate(self):
-        self.assertEqual(self.assemble('primary', self.base / 'full').returncode, 0)
-        self.assertIn('include website[.]conf;\n    include installer.conf;\n', (self.base / 'full/nginx.conf').read_text())
-        for name in ('installer.conf', 'installer-base.conf', 'installer-page.conf', 'installer-general.conf'):
-            self.assertEqual((ROOT / 'debian/installer' / name).read_text(), (self.base / 'full' / name).read_text())
-        http, https = (self.base / 'full/installer.conf').read_text().split('\nserver {')[1:]
-        self.assertIn('location /.well-known/acme-challenge/ {\n        root /var/lib/letsencrypt/webroot;', http)
-        self.assertIn('ssl_certificate /etc/letsencrypt/live/diamaneos-installer/fullchain.pem;', https)
-        # A location with add_header drops the server's, so each one includes the base and one policy.
-        locations = https.split('\n    location ')[1:]
-        self.assertEqual(4, len(locations))
-        for block in locations:
-            self.assertIn('include installer-base.conf;', block)
-            self.assertEqual(1, block.count('include installer-page.conf;') + block.count('include installer-general.conf;'))
-        self.assertNotIn('ads.conf', http + https)
-        # One HTTP/2 connection serves the page and its modules: the http block has keepalive_timeout 0.
-        self.assertIn('    keepalive_requests 64;\n    keepalive_timeout 15s;\n', https)
-        self.assertNotIn('keepalive', http)
-        # The pages use a self-hosted font. The installer page also downloads from the release host.
-        for name in ('installer-page.conf', 'installer-general.conf'):
-            self.assertIn("font-src 'self'; img-src", (self.base / 'full' / name).read_text())
-        self.assertIn("default-src 'none'; connect-src https://releases.diamaneos.de; font-src",
-                      (self.base / 'full/installer-page.conf').read_text())
-
-        self.assertEqual(self.assemble('primary', self.base / 'pending', '--before-installer-certificate').returncode, 0)
-        full = (self.base / 'full/installer.conf').read_text()
-        self.assertEqual(full[:full.rindex('\nserver {') + 1], (self.base / 'pending/installer.conf').read_text())
-        self.assertFalse((self.base / 'pending/installer-base.conf').exists())
-        for role in ('mirror', 'attestation'):
-            self.assertNotEqual(self.assemble(role, self.base / 'refused', '--before-installer-certificate').returncode, 0)
-            self.assertFalse((self.base / 'refused').exists())
-        access = (ROOT / 'debian/nginx-cert-access').read_text()
-        self.assertIn(' diamaneos-installer diamaneos-staging-installer ', access)
-
     def test_primary_mta_sts_policy_and_its_first_certificate(self):
         self.assertEqual(self.assemble('primary', self.base / 'full').returncode, 0)
-        self.assertIn('include installer.conf;\n    include mta-sts.conf;\n', (self.base / 'full/nginx.conf').read_text())
+        self.assertIn('include website[.]conf;\n    include mta-sts.conf;\n', (self.base / 'full/nginx.conf').read_text())
         full = (self.base / 'full/mta-sts.conf').read_text()
         self.assertEqual((ROOT / 'debian/mta-sts/mta-sts.conf').read_text(), full)
         http, https = full.split('\nserver {')[1:]
@@ -152,12 +117,12 @@ class DeploymentInputsTest(unittest.TestCase):
 
         self.assertEqual(self.assemble('primary', self.base / 'pending', '--before-mta-sts-certificate').returncode, 0)
         self.assertEqual(full[:full.rindex('\nserver {') + 1], (self.base / 'pending/mta-sts.conf').read_text())
-        self.assertEqual((self.base / 'full/installer.conf').read_text(), (self.base / 'pending/installer.conf').read_text())
         for role in ('mirror', 'attestation'):
             self.assertNotEqual(self.assemble(role, self.base / 'refused', '--before-mta-sts-certificate').returncode, 0)
             self.assertFalse((self.base / 'refused').exists())
         access = (ROOT / 'debian/nginx-cert-access').read_text()
-        self.assertIn(' diamaneos-mta-sts; do', access)
+        self.assertIn(' diamaneos-staging diamaneos-mta-sts; do', access)
+        self.assertNotIn('installer', access)
 
     def test_download_addresses_serve_only_the_download_names(self):
         (self.source / 'network/nginx/nginx.conf').write_text(

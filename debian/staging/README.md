@@ -17,19 +17,15 @@ configuration supplied outside the renderer.
 The staging crawler policy merges into nested responses. Request logs remain
 disabled, and unknown hosts retain the inherited refusal behavior.
 
-`web` also serves the primary's installer site as `install.staging.diamaneos.de`
-from `/srv/diamaneos-staging/installer/current`, with its own
-`diamaneos-staging-installer` certificate lineage. Before that certificate exists,
-render with `--before-installer-certificate` so only its HTTP server is live.
-The installer page keeps `connect-src https://releases.diamaneos.de`, the one
-production reference allowed, because the page downloads releases from there.
-
 The website serves the web installer at `/install/web/` with the installer's own
 headers, which `--installer-headers` reads from the website's `server/nginx`
 folder (`website-installer-*.conf`). HTML gets `Cache-Control: no-cache`, as on
 the production website.
 
-All other names use the `diamaneos-staging` certificate lineage. HTTP serves challenges
+The installer page keeps `connect-src https://releases.diamaneos.de`, the one
+production reference allowed, because the page downloads releases from there.
+
+All names use the `diamaneos-staging` certificate lineage. HTTP serves challenges
 from `/srv/diamaneos-staging/acme`. The renderer writes only a fresh local output
 directory. It does not install dependencies, obtain certificates or start services.
 

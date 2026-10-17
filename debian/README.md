@@ -71,16 +71,8 @@ user. A bare root `nginx -t` can leave incorrectly owned PID/cache files.
 
 The primary configuration accepts an optional local `website.conf` include.
 Website content, its certificate and contact handler are supplied by the
-website deployment. This repository does not stage them.
-
-The primary also serves the web installer as `install.diamaneos.de` from
-`/srv/diamaneos-installer/current`, with its own `diamaneos-installer`
-certificate. `installer/` holds the server and the installer's header files.
-When nothing is published there, every path answers 404.
-
-Before that certificate exists, assemble with `--before-installer-certificate`
-so only the installer's HTTP server is live. Request the certificate, then
-assemble and install again without the option.
+website deployment. This repository does not stage them. The website deployment
+also supplies the web installer at `/install/web/` and its headers.
 
 `mta-sts.diamaneos.de` serves the MTA-STS policy for mail to diamaneos.de
 (`mta-sts/mta-sts.conf`, RFC 8461) with its own `diamaneos-mta-sts`

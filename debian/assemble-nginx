@@ -10,11 +10,10 @@ import re
 import sys
 
 USAGE = ('usage: assemble-nginx primary|mirror|attestation SOURCE_ROOT OUTPUT [--before-status-certificate]'
-         ' [--before-installer-certificate] [--before-mta-sts-certificate] [--host-json PATH]'
+         ' [--before-mta-sts-certificate] [--host-json PATH]'
          ' [--download-address ADDRESS]... [--downloads-moved]')
 DOWNLOAD_NAMES = {'releases.diamaneos.de', 'apps.diamaneos.de'}
 HOST_JSON = '/etc/diamaneos/host.json'
-INSTALLER = Path(__file__).resolve().parent / 'installer'
 MTA_STS = Path(__file__).resolve().parent / 'mta-sts'
 if len(sys.argv) < 4:
     raise SystemExit(USAGE)
@@ -23,9 +22,7 @@ options = sys.argv[4:]
 # nginx refuses to start without a certificate, so the first status certificate
 # is requested while only the status page's HTTP server is live.
 pending = '--before-status-certificate' in options
-# Likewise the primary's installer site: its HTTP server answers the challenge first.
-installer_pending = '--before-installer-certificate' in options
-# And the primary's MTA-STS policy name.
+# Likewise the primary's MTA-STS policy name: its HTTP server answers the challenge first.
 mta_sts_pending = '--before-mta-sts-certificate' in options
 # The primary's download names can have their own addresses (host.json download_addresses).
 # Moved: they no longer answer on the shared address of that family, once DNS points at theirs
@@ -34,8 +31,7 @@ moved = '--downloads-moved' in options
 downloads = {}
 host_json = None
 rest = [option for option in options
-        if option not in ('--before-status-certificate', '--before-installer-certificate',
-                          '--before-mta-sts-certificate', '--downloads-moved')]
+        if option not in ('--before-status-certificate', '--before-mta-sts-certificate', '--downloads-moved')]
 
 
 def add_download(value, found):
@@ -58,7 +54,7 @@ while rest[:1] in (['--download-address'], ['--host-json']) and len(rest) > 1:
         raise SystemExit(USAGE)
     del rest[:2]
 if (rest or (pending and role != 'mirror')
-        or ((downloads or moved or host_json or installer_pending or mta_sts_pending) and role != 'primary')
+        or ((downloads or moved or host_json or mta_sts_pending) and role != 'primary')
         or (moved and not downloads)):
     raise SystemExit(USAGE)
 if role not in {'primary', 'mirror', 'attestation'}:
@@ -156,7 +152,7 @@ if role == 'primary':
     files['nginx.conf'] = (source / 'network/nginx/nginx.conf').read_text()
     files['nginx.conf'] = files['nginx.conf'].replace(
         'include releases[.]conf;',
-        'include releases[.]conf;\n    include website[.]conf;\n    include installer.conf;\n    include mta-sts.conf;')
+        'include releases[.]conf;\n    include website[.]conf;\n    include mta-sts.conf;')
     if downloads:
         files['releases.conf'] = download_vhosts(files['releases.conf'])
         files['nginx.conf'] = download_supl(files['nginx.conf'])
@@ -231,13 +227,11 @@ if role == 'mirror':
 }
 '''
 if role == 'primary':
-    # Added after the ads.conf includes: the installer and MTA-STS sites serve only their own files.
-    for folder in (INSTALLER, MTA_STS):
-        files.update((path.name, path.read_text()) for path in folder.iterdir() if path.suffix == '.conf')
-    for name, waiting in (('installer.conf', installer_pending), ('mta-sts.conf', mta_sts_pending)):
-        if waiting:
-            blocks = re.split(r'(?m)^(?=server \{)', files[name])
-            files[name] = ''.join(block for block in blocks if not re.search(r'(?m)^\s*listen [^;]*443', block))
+    # Added after the ads.conf includes: the MTA-STS site serves only its own files.
+    files.update((path.name, path.read_text()) for path in MTA_STS.iterdir() if path.suffix == '.conf')
+    if mta_sts_pending:
+        blocks = re.split(r'(?m)^(?=server \{)', files['mta-sts.conf'])
+        files['mta-sts.conf'] = ''.join(block for block in blocks if not re.search(r'(?m)^\s*listen [^;]*443', block))
 files['ads.conf'] = '''location = /ads.txt {
     default_type text/plain;
     return 200 "placeholder.example.com, placeholder, DIRECT, placeholder\\n";

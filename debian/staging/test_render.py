@@ -94,28 +94,9 @@ class RenderTests(unittest.TestCase):
                        'X-Robots-Tag "noindex, nofollow, noarchive"'):
             self.assertIn('add_header ' + header + ' always;', keys)
 
-    def test_installer_site_uses_staging_names_and_its_own_lineage(self):
-        self.render()
-        text = (self.output / 'installer.conf').read_text()
-        for line in ('server_name install.staging.diamaneos.de;', 'root /srv/diamaneos-staging/acme;',
-                     'ssl_certificate_key /etc/letsencrypt/live/diamaneos-staging-installer/privkey.pem;',
-                     'root /srv/diamaneos-staging/installer/current;', 'include installer-page.conf;',
-                     'keepalive_timeout 15s;'):
-            self.assertIn(line, text)
-        self.assertIn('connect-src https://releases.diamaneos.de;', (self.output / 'installer-page.conf').read_text())
-        for name, policy in (('installer-page.conf', 'connect-src https://releases.diamaneos.de; img-src https://diamaneos.de;'),
-                             ('installer-general.conf', 'connect-src https://releases.diamaneos.de;')):
-            with self.assertRaises(ValueError): renderer.validate({name: policy}, 'web')
-        self.assertIn('include mirror.conf;\n    include installer.conf;', (self.output / 'nginx.conf').read_text())
-        shutil.rmtree(self.output)
-        renderer.render('web', self.source, self.output, self.headers, installer_pending=True, installer_headers=self.installer)
-        text = (self.output / 'installer.conf').read_text()
-        self.assertIn('location /.well-known/acme-challenge/', text)
-        self.assertNotIn('443', text)
-        self.assertFalse((self.output / 'installer-page.conf').exists())
-
     def test_website_serves_the_installer_with_its_own_headers(self):
         self.render()
+        self.assertNotIn('install.staging', '\n'.join(p.read_text() for p in self.output.glob('*.conf')))
         website = (self.output / 'mirror.conf').read_text().split('server_name staging.diamaneos.de;')[2]
         self.assertIn('location = /install/web { return 301 /install/web/; }', website)
         block = website.split('location ^~ /install/web/ {\n')[1].split('\n    }\n')[0]
