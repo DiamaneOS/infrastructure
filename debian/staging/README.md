@@ -24,12 +24,17 @@ render with `--before-installer-certificate` so only its HTTP server is live.
 The installer page keeps `connect-src https://releases.diamaneos.de`, the one
 production reference allowed, because the page downloads releases from there.
 
+The website serves the web installer at `/install/web/` with the installer's own
+headers, which `--installer-headers` reads from the website's `server/nginx`
+folder (`website-installer-*.conf`). HTML gets `Cache-Control: no-cache`, as on
+the production website.
+
 All other names use the `diamaneos-staging` certificate lineage. HTTP serves challenges
 from `/srv/diamaneos-staging/acme`. The renderer writes only a fresh local output
 directory. It does not install dependencies, obtain certificates or start services.
 
 ```sh
-python3 debian/staging/render.py web SOURCE OUTPUT --website-headers WEBSITE_HEADERS
+python3 debian/staging/render.py web SOURCE OUTPUT --website-headers WEBSITE_HEADERS --installer-headers WEBSITE_NGINX
 python3 debian/staging/render.py attestation-disabled SOURCE SEPARATE_OUTPUT
 python3 -B -m unittest discover -s debian/staging -p 'test_*.py'
 ```

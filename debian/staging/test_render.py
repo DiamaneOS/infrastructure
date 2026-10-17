@@ -32,10 +32,16 @@ class RenderTests(unittest.TestCase):
         (attestation / 'root_attestation.diamaneos.de.conf').write_text('root /srv/attestation.diamaneos.de_a;\n')
         self.headers = self.root / 'website-headers.conf'
         self.headers.write_text('add_header Content-Security-Policy "default-src none";\nadd_header X-Content-Type-Options nosniff;\n')
+        self.installer = self.root / 'installer-headers'
+        self.installer.mkdir()
+        (self.installer / 'website-installer-base.conf').write_text('# Every response.\nadd_header X-Content-Type-Options "nosniff" always;\n')
+        (self.installer / 'website-installer-page.conf').write_text(
+            'add_header Content-Security-Policy "default-src \'none\'; connect-src https://releases.diamaneos.de; script-src \'self\'" always;\n')
+        (self.installer / 'website-installer-general.conf').write_text('add_header Content-Security-Policy "default-src \'none\'" always;\n')
         self.output = self.root / 'output'
 
     def render(self, role='web'):
-        renderer.render(role, self.source, self.output, self.headers)
+        renderer.render(role, self.source, self.output, self.headers, installer_headers=self.installer)
 
     def test_web_reuses_artifact_handlers_and_adds_only_static_website(self):
         self.render()
@@ -102,11 +108,38 @@ class RenderTests(unittest.TestCase):
             with self.assertRaises(ValueError): renderer.validate({name: policy}, 'web')
         self.assertIn('include mirror.conf;\n    include installer.conf;', (self.output / 'nginx.conf').read_text())
         shutil.rmtree(self.output)
-        renderer.render('web', self.source, self.output, self.headers, installer_pending=True)
+        renderer.render('web', self.source, self.output, self.headers, installer_pending=True, installer_headers=self.installer)
         text = (self.output / 'installer.conf').read_text()
         self.assertIn('location /.well-known/acme-challenge/', text)
         self.assertNotIn('443', text)
         self.assertFalse((self.output / 'installer-page.conf').exists())
+
+    def test_website_serves_the_installer_with_its_own_headers(self):
+        self.render()
+        website = (self.output / 'mirror.conf').read_text().split('server_name staging.diamaneos.de;')[2]
+        self.assertIn('location = /install/web { return 301 /install/web/; }', website)
+        block = website.split('location ^~ /install/web/ {\n')[1].split('\n    }\n')[0]
+        self.assertEqual(4, block.count('add_header_inherit on;'))
+        self.assertEqual(4, block.count('add_header X-Robots-Tag "noindex, nofollow, noarchive" always;'))
+        self.assertEqual(4, block.count('include website-installer-base.conf;'))
+        self.assertEqual(2, block.count('include website-installer-page.conf;'))
+        self.assertIn('try_files /install/web/index.html =404;', block)
+        self.assertIn('text/javascript js mjs;', block)
+        self.assertNotIn('website-headers.conf', block)
+        self.assertEqual('add_header X-Content-Type-Options "nosniff" always;\n',
+                         (self.output / 'website-installer-base.conf').read_text())
+        self.assertIn('connect-src https://releases.diamaneos.de;', (self.output / 'website-installer-page.conf').read_text())
+        with self.assertRaises(ValueError):
+            renderer.validate({'website-installer-general.conf': 'connect-src https://releases.diamaneos.de;'}, 'web')
+        shutil.rmtree(self.output)
+        with self.assertRaises(ValueError): renderer.render('web', self.source, self.output, self.headers)
+
+    def test_html_is_revalidated(self):
+        self.render()
+        text = (self.output / 'mirror.conf').read_text()
+        self.assertIn('map $sent_http_content_type $website_cache_control {\n    ~^text/html "no-cache";\n    default "";\n}', text)
+        server = text.split('server_name staging.diamaneos.de;')[2].split('location ')[0]
+        self.assertIn('include website-headers.conf;\n    add_header Cache-Control $website_cache_control always;', server)
 
     def test_attestation_is_separate_loopback_and_closed(self):
         self.render('attestation-disabled')

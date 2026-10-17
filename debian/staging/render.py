@@ -43,8 +43,10 @@ LINEAGES = {
 }
 DIRECTIVE = re.compile(r'(?m)^(\s*)(server_name|ssl_certificate_key|ssl_certificate|root|alias|include|return)\s+([^;\n]+);')
 DOMAIN = re.compile(r'(?<![\w.-])(?:[a-z0-9-]+\.)*diamaneos\.de(?![\w.-])')
-# The installer page downloads releases from production. This one source may name it.
-RELEASE_SOURCE = ('installer-page.conf', 'connect-src https://releases.diamaneos.de;')
+# The installer page downloads releases from production. These sources may name it once.
+RELEASE_SOURCE = ({'installer-page.conf', 'website-installer-page.conf'}, 'connect-src https://releases.diamaneos.de;')
+# The website's copy of the installer's headers, for /install/web/.
+INSTALLER_HEADERS = ('website-installer-base.conf', 'website-installer-page.conf', 'website-installer-general.conf')
 def require(value, message):
     if not value:
         raise ValueError(message)
@@ -93,7 +95,7 @@ def validate(files, role):
     for name, text in files.items():
         if not name.endswith('.conf'):
             continue
-        checked = text.replace(RELEASE_SOURCE[1], '', 1) if name == RELEASE_SOURCE[0] else text
+        checked = text.replace(RELEASE_SOURCE[1], '', 1) if name in RELEASE_SOURCE[0] else text
         # Filenames and arbitrary strings are checked too: missed directives fail closed.
         require(all(host in allowed for host in DOMAIN.findall(name + '\n' + checked)),
                 'Production or unexpected hostname remains')
@@ -104,7 +106,12 @@ def validate(files, role):
         require('proxy_pass' not in text if role == 'web' else True, 'Static web cannot proxy to a backend')
         for value in re.findall(r'(?m)^\s*include\s+([^;]+);', text):
             require(value in files, 'Unresolved include remains')
-WEBSITE = '''server {
+WEBSITE = '''# Browsers revalidate HTML on every visit, as on the production website.
+map $sent_http_content_type $website_cache_control {
+    ~^text/html "no-cache";
+    default "";
+}
+server {
     listen 80; listen [::]:80;
     server_name staging.diamaneos.de;
     location /.well-known/acme-challenge/ { root /srv/diamaneos-staging/acme; }
@@ -125,6 +132,7 @@ server {
     keepalive_requests 64;
     keepalive_timeout 15s;
     include website-headers.conf;
+    add_header Cache-Control $website_cache_control always;
     location = /contact/submit { return 503; }
     location = /robots.txt { default_type text/plain; return 200 "User-agent: *\\nDisallow: /\\n"; }
     location = /healthz { default_type text/plain; return 200 "ready\\n"; }
@@ -168,6 +176,48 @@ server {
         NOINDEX_HEADER
         try_files $uri =404;
     }
+    # The web installer with its own headers instead of the website's, as on the production website.
+    location = /install/web { return 301 /install/web/; }
+    location ^~ /install/web/ {
+        if ($request_method !~ ^(?:GET|HEAD)$) { return 405; }
+        types {
+            text/html html;
+            text/css css;
+            text/javascript js mjs;
+            application/json map;
+            font/woff2 woff2;
+        }
+        default_type text/plain;
+        charset utf-8;
+        add_header_inherit on;
+        include website-installer-base.conf;
+        include website-installer-general.conf;
+        add_header Cache-Control "no-cache" always;
+        NOINDEX_HEADER
+        try_files $uri =404;
+        location = /install/web/ {
+            add_header_inherit on;
+            include website-installer-base.conf;
+            include website-installer-page.conf;
+            add_header Cache-Control "no-cache" always;
+            NOINDEX_HEADER
+            try_files /install/web/index.html =404;
+        }
+        location = /install/web/index.html {
+            add_header_inherit on;
+            include website-installer-base.conf;
+            include website-installer-page.conf;
+            add_header Cache-Control "no-cache" always;
+            NOINDEX_HEADER
+        }
+        location ^~ /install/web/js/fastboot/ {
+            add_header_inherit on;
+            include website-installer-base.conf;
+            include website-installer-general.conf;
+            add_header Cache-Control "public, max-age=31536000, immutable" always;
+            NOINDEX_HEADER
+        }
+    }
     # The short link the setup wizard shows, as on the production website.
     location ~* ^/ubl/?$ { return 301 /faq/#bootloader-locking-setup; }
     location ~ (^|/)\\. { return 404; }
@@ -199,7 +249,12 @@ def installer(pending):
         blocks = re.split(r'(?m)^(?=server \{)', files['installer.conf'])
         files = {'installer.conf': ''.join(block for block in blocks if not re.search(r'(?m)^\s*listen [^;]*443', block))}
     return {name: rewrite(text) for name, text in files.items()}
-def render(role, source, output, website_headers=None, installer_pending=False):
+def header_file(path, limit=16384):
+    text = read(path, limit)
+    require(all(not line.strip() or line.lstrip().startswith('#') or line.lstrip().startswith('add_header ')
+                for line in text.splitlines()), 'Unsupported website header directives')
+    return text
+def render(role, source, output, website_headers=None, installer_pending=False, installer_headers=None):
     source, output = Path(source), Path(output)
     require(source.resolve() == source, 'Symlinked source root is unsupported')
     require(role in ('web', 'attestation-disabled'), 'Unsupported staging role')
@@ -220,11 +275,16 @@ def render(role, source, output, website_headers=None, installer_pending=False):
              for name, text in files.items()}
     if role == 'web':
         require(website_headers is not None, 'Reviewed website headers are required')
-        headers = read(Path(website_headers), 16384)
-        require(all(not line.strip() or line.lstrip().startswith('#') or line.lstrip().startswith('add_header ')
-                    for line in headers.splitlines()), 'Unsupported website header directives')
+        headers = header_file(Path(website_headers))
         require('Content-Security-Policy' in headers and 'X-Content-Type-Options' in headers,
                 'Website security headers are missing')
+        require(installer_headers is not None, 'The website\'s installer headers are required')
+        for name in INSTALLER_HEADERS:
+            text = header_file(Path(installer_headers) / name)
+            require(name == 'website-installer-base.conf' or 'Content-Security-Policy' in text,
+                    'Installer security headers are missing')
+            files[name] = rewrite(text)
+            inputs[name] = hashlib.sha256(text.encode()).hexdigest()
         state = read(source / 'attestation/nginx/service-state.conf', 16384)
         closed = re.findall(r'(?m)^\s*(return 503 "[^"\n]+";)', state)
         require(len(closed) == 1, 'Explicit closed attestation response is required')
@@ -267,8 +327,10 @@ def main():
     parser.add_argument('role', choices=('web', 'attestation-disabled'))
     parser.add_argument('source', type=Path); parser.add_argument('output', type=Path)
     parser.add_argument('--website-headers', type=Path)
+    parser.add_argument('--installer-headers', type=Path, help="the website's server/nginx folder")
     parser.add_argument('--before-installer-certificate', action='store_true')
     args = parser.parse_args()
-    render(args.role, args.source, args.output, args.website_headers, args.before_installer_certificate)
+    render(args.role, args.source, args.output, args.website_headers, args.before_installer_certificate,
+           args.installer_headers)
 if __name__ == '__main__':
     main()
