@@ -43,6 +43,8 @@ LINEAGES = {
 }
 DIRECTIVE = re.compile(r'(?m)^(\s*)(server_name|ssl_certificate_key|ssl_certificate|root|alias|include|return)\s+([^;\n]+);')
 DOMAIN = re.compile(r'(?<![\w.-])(?:[a-z0-9-]+\.)*diamaneos\.de(?![\w.-])')
+# The installer page downloads releases from production. This one source may name it.
+RELEASE_SOURCE = ('installer-page.conf', 'connect-src https://releases.diamaneos.de;')
 def require(value, message):
     if not value:
         raise ValueError(message)
@@ -91,8 +93,9 @@ def validate(files, role):
     for name, text in files.items():
         if not name.endswith('.conf'):
             continue
+        checked = text.replace(RELEASE_SOURCE[1], '', 1) if name == RELEASE_SOURCE[0] else text
         # Filenames and arbitrary strings are checked too: missed directives fail closed.
-        require(all(host in allowed for host in DOMAIN.findall(name + '\n' + text)),
+        require(all(host in allowed for host in DOMAIN.findall(name + '\n' + checked)),
                 'Production or unexpected hostname remains')
         require(not re.search(r'/srv/(?!diamaneos-staging(?:/|\b))', text)
                 and not re.search(r'/etc/letsencrypt/live/(?!diamaneos-staging(?:-installer)?/)', text)
