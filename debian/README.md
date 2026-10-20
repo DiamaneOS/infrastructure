@@ -102,6 +102,14 @@ uses `releases-na.diamaneos.de` and `apps-na.diamaneos.de`. Each host obtains it
 own ACME certificates and answers its own challenges. Use webroot renewal once
 nginx occupies the HTTP port.
 
+Both Apps hosts serve GrapheneOS's app catalog and APKs unchanged under
+`/grapheneos/`. `sudo ./debian/install-apps-mirror ROLE APPS_CLONE` installs
+apps.diamaneos.de's `grapheneos-mirror.py` and its timer from the staged clone.
+It runs as `diamaneos-apps-mirror`, which may write only
+`/srv/apps.diamaneos.de-grapheneos/grapheneos` and its state, and whose egress
+is limited to apps.grapheneos.org on 443. It needs no key. The script enables
+the timer without starting a run.
+
 The primary's download names can have their own address, so a flood on them
 leaves the other services' address alone. List it in `download_addresses` in
 `host.json` (one IPv4 and at most one IPv6 address). `configure-host` adds it to

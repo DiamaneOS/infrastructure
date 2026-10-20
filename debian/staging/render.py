@@ -27,6 +27,7 @@ FILES = {
 ROOTS = {
     '/srv/releases.diamaneos.de_a': BASE + '/releases/current',
     '/srv/apps.diamaneos.de_a': BASE + '/apps/current',
+    '/srv/apps.diamaneos.de-grapheneos': BASE + '/apps-grapheneos',
     '/srv/releases': BASE + '/releases/metadata',
     '/srv/attestation.diamaneos.de_a': BASE + '/attestation/public',
     '/var/lib/letsencrypt/webroot': BASE + '/acme',

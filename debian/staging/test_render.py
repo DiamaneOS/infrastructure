@@ -24,7 +24,7 @@ class RenderTests(unittest.TestCase):
             (directory / 'headers.conf').write_text('add_header X-Content-Type-Options nosniff;\n')
         release = self.source / 'releases/nginx'
         (release / 'nginx.conf').write_text('events {}\nhttp {\n include mime.types;\n include releases.conf;\n}\n')
-        (release / 'releases.conf').write_text('server {\n server_name releases.diamaneos.de apps.diamaneos.de;\n include headers.conf;\n ssl_certificate /etc/letsencrypt/live/diamaneos-artifacts/fullchain.pem;\n ssl_certificate_key /etc/letsencrypt/live/diamaneos-artifacts/privkey.pem;\n include root_apps.diamaneos.de.conf;\n}\n')
+        (release / 'releases.conf').write_text('server {\n server_name releases.diamaneos.de apps.diamaneos.de;\n include headers.conf;\n ssl_certificate /etc/letsencrypt/live/diamaneos-artifacts/fullchain.pem;\n ssl_certificate_key /etc/letsencrypt/live/diamaneos-artifacts/privkey.pem;\n include root_apps.diamaneos.de.conf;\n location ^~ /grapheneos/ {\n  root /srv/apps.diamaneos.de-grapheneos;\n }\n}\n')
         (release / 'root_apps.diamaneos.de.conf').write_text('root /srv/apps.diamaneos.de_a;\n')
         attestation = self.source / 'attestation/nginx'
         (attestation / 'nginx.conf').write_text('events {}\nhttp {\n upstream backend { server [::1]:8080; }\n server {\n server_name attestation.diamaneos.de;\n ssl_certificate /etc/letsencrypt/live/diamaneos-attestation/fullchain.pem;\n ssl_certificate_key /etc/letsencrypt/live/diamaneos-attestation/privkey.pem;\n include service-state.conf;\n include root_attestation.diamaneos.de.conf;\n }\n}\n')
@@ -53,6 +53,8 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn('proxy_pass', config)
         self.assertNotIn('/srv/apps.diamaneos.de_a', config)
         self.assertIn('/srv/diamaneos-staging/apps/current', config)
+        self.assertNotIn('/srv/apps.diamaneos.de-grapheneos', config)
+        self.assertIn('root /srv/diamaneos-staging/apps-grapheneos;', config)
         self.assertIn('/etc/letsencrypt/live/diamaneos-staging/', config)
         self.assertIn('attestation.staging.diamaneos.de', config)
         self.assertIn('Disallow: /', config)

@@ -1,0 +1,30 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Install the mirror of GrapheneOS's app catalog from a staged apps.diamaneos.de clone.
+# It enables the timer but does not start a run.
+set -euo pipefail
+test "$(id -u)" -eq 0
+role=${1:?usage: install-apps-mirror primary|mirror APPS_CLONE}
+apps=${2:?usage: install-apps-mirror primary|mirror APPS_CLONE}
+case $role in primary|mirror) ;; *) exit 2 ;; esac
+test "$(cat /etc/diamaneos/web-role)" = "$role"
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+source "$here/host/lib.sh"
+for name in grapheneos-mirror.py grapheneos-apps.0.pub grapheneos/reviewed.json \
+        systemd/diamaneos-grapheneos-mirror.service systemd/diamaneos-grapheneos-mirror.timer; do
+    test -f "$apps/$name" && ! test -L "$apps/$name"
+done
+apt_install python3 signify-openbsd
+system_user diamaneos-apps-mirror
+install -d -o root -g root -m 0755 /opt/diamaneos-apps-mirror /opt/diamaneos-apps-mirror/grapheneos
+install -o root -g root -m 0644 "$apps/grapheneos-mirror.py" "$apps/grapheneos-apps.0.pub" /opt/diamaneos-apps-mirror/
+install -o root -g root -m 0644 "$apps/grapheneos/reviewed.json" /opt/diamaneos-apps-mirror/grapheneos/
+install -d -o root -g root -m 0755 /srv/apps.diamaneos.de-grapheneos
+install -d -o diamaneos-apps-mirror -g diamaneos-apps-mirror -m 0755 /srv/apps.diamaneos.de-grapheneos/grapheneos
+for name in diamaneos-grapheneos-mirror.service diamaneos-grapheneos-mirror.timer; do
+    install -o root -g root -m 0644 "$apps/systemd/$name" "/etc/systemd/system/$name"
+done
+systemctl daemon-reload
+# The account's egress is limited to apps.grapheneos.org before its first run.
+systemctl start diamaneos-egress.service
+systemctl enable diamaneos-grapheneos-mirror.timer
