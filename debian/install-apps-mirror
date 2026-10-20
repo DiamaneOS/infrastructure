@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
-# Install the mirror of GrapheneOS's app catalog from a staged apps.diamaneos.de clone.
-# It enables the timer but does not start a run.
+# Install the mirror of GrapheneOS's app catalog from a staged apps.diamaneos.de clone, limit its
+# account's egress, run it once and start its timer.
 set -euo pipefail
 test "$(id -u)" -eq 0
 role=${1:?usage: install-apps-mirror primary|mirror APPS_CLONE}
@@ -10,21 +10,30 @@ case $role in primary|mirror) ;; *) exit 2 ;; esac
 test "$(cat /etc/diamaneos/web-role)" = "$role"
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 source "$here/host/lib.sh"
-for name in grapheneos-mirror.py grapheneos-apps.0.pub grapheneos/reviewed.json \
+for name in grapheneos-mirror.py grapheneos-apps.0.pub \
         systemd/diamaneos-grapheneos-mirror.service systemd/diamaneos-grapheneos-mirror.timer; do
     test -f "$apps/$name" && ! test -L "$apps/$name"
 done
 apt_install python3 signify-openbsd
 system_user diamaneos-apps-mirror
-install -d -o root -g root -m 0755 /opt/diamaneos-apps-mirror /opt/diamaneos-apps-mirror/grapheneos
+# The egress refresh that knows the account, as install-web-runtime installs it.
+install -m 0755 "$here/refresh-egress" /usr/local/sbin/diamaneos-refresh-egress
+install -m 0644 "$here/egress_config.py" /usr/local/sbin/egress_config.py
+systemctl start diamaneos-egress.service
+uid=$(id -u diamaneos-apps-mirror)
+rules=$(nft list table inet diamaneos_egress)
+grep -qF "meta skuid $uid reject" <<<"$rules" || {
+    echo "the egress limit for diamaneos-apps-mirror is not in place" >&2
+    exit 1
+}
+install -d -o root -g root -m 0755 /opt/diamaneos-apps-mirror
 install -o root -g root -m 0644 "$apps/grapheneos-mirror.py" "$apps/grapheneos-apps.0.pub" /opt/diamaneos-apps-mirror/
-install -o root -g root -m 0644 "$apps/grapheneos/reviewed.json" /opt/diamaneos-apps-mirror/grapheneos/
 install -d -o root -g root -m 0755 /srv/apps.diamaneos.de-grapheneos
 install -d -o diamaneos-apps-mirror -g diamaneos-apps-mirror -m 0755 /srv/apps.diamaneos.de-grapheneos/grapheneos
 for name in diamaneos-grapheneos-mirror.service diamaneos-grapheneos-mirror.timer; do
     install -o root -g root -m 0644 "$apps/systemd/$name" "/etc/systemd/system/$name"
 done
 systemctl daemon-reload
-# The account's egress is limited to apps.grapheneos.org before its first run.
-systemctl start diamaneos-egress.service
-systemctl enable diamaneos-grapheneos-mirror.timer
+# The first run fetches about 1.2 GB. The timer starts only after it succeeds.
+systemctl start diamaneos-grapheneos-mirror.service
+systemctl enable --now diamaneos-grapheneos-mirror.timer

@@ -48,19 +48,32 @@ except KeyError:
 if apps_mirror is not None:
     destinations['grapheneos'] = (443, ['apps.grapheneos.org'])
 
-addresses = {}
-for key, (_, names) in destinations.items():
+def resolve(names):
     found = {4: set(), 6: set()}
     for name in names:
-        answers = socket.getaddrinfo(name, None, type=socket.SOCK_STREAM)
+        try:
+            answers = socket.getaddrinfo(name, None, type=socket.SOCK_STREAM)
+        except OSError:
+            raise ValueError('DNS lookup failed') from None
         if not answers:
-            raise SystemExit('empty DNS answer')
+            raise ValueError('empty DNS answer')
         for family, _, _, _, peer in answers:
             address = ipaddress.ip_address(peer[0])
             if not address.is_global:
-                raise SystemExit('non-public upstream address refused')
+                raise ValueError('non-public upstream address refused')
             found[address.version].add(str(address))
-    addresses[key] = found
+    return found
+
+
+addresses = {}
+for key, (_, names) in destinations.items():
+    try:
+        addresses[key] = resolve(names)
+    except ValueError as error:
+        if key != 'grapheneos':
+            raise SystemExit(str(error)) from None
+        # The mirror keeps its addresses of the last hour, and the other services keep theirs.
+        addresses[key] = {4: set(), 6: set()}
 
 # Each set holds every address resolved within the last hour, not only the latest answer.
 seen = merge_seen(load_seen(), {f'{key}{version}': found[version]

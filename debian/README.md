@@ -107,8 +107,11 @@ Both Apps hosts serve GrapheneOS's app catalog and APKs unchanged under
 apps.diamaneos.de's `grapheneos-mirror.py` and its timer from the staged clone.
 It runs as `diamaneos-apps-mirror`, which may write only
 `/srv/apps.diamaneos.de-grapheneos/grapheneos` and its state, and whose egress
-is limited to apps.grapheneos.org on 443. It needs no key. The script enables
-the timer without starting a run.
+is limited to apps.grapheneos.org on 443. It needs no key. The script installs
+the egress refresh and checks the account's reject rule first, then runs the
+mirror once (about 1.2 GB) and starts the timer. A failed lookup of
+apps.grapheneos.org keeps the mirror's addresses of the last hour and never
+removes the other services' destinations.
 
 The primary's download names can have their own address, so a flood on them
 leaves the other services' address alone. List it in `download_addresses` in
