@@ -63,6 +63,12 @@ attestation service logs to that namespace (`LogNamespace=attestation` in
 `attestation-debian.conf`), so its output never reaches the disk. Run
 `journalctl --flush` after the switch so journald writes to `/var/log/journal`.
 
+A host whose state needs a manual unlock after boot sets `automatic_reboot` to
+`false` in `host.json`. `configure-host` then writes `61diamaneos-no-reboot`
+(`Unattended-Upgrade::Automatic-Reboot "false"`), which sorts after a reboot
+policy installed before it, so updates are still installed but the host is
+restarted by hand. It removes that file on a host without the setting.
+
 Install the staged infrastructure root-owned at `/opt/diamaneos-infrastructure`.
 On a new host:
 

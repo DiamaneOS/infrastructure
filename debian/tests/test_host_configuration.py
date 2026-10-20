@@ -273,6 +273,22 @@ class HostConfigurationTest(unittest.TestCase):
             self.assertFalse((sshd / '02-diamaneos-unlock.conf').exists())
             self.assertEqual('AllowUsers admin\n', (sshd / '00-diamaneos-admin.conf').read_text())
 
+    def test_main_writes_the_no_reboot_policy_only_when_asked(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            policy = root / 'etc/apt/apt.conf.d/61diamaneos-no-reboot'
+            self.run_main(root, self.config(automatic_reboot=False))
+            self.assertEqual(self.host.NO_REBOOT_TEXT, policy.read_text())
+            self.assertEqual(0o644, policy.stat().st_mode & 0o777)
+            self.assertIn('Unattended-Upgrade::Automatic-Reboot "false";\n', policy.read_text())
+            for config in (self.config(automatic_reboot=True), self.config()):
+                self.run_main(root, self.config(automatic_reboot=False))
+                self.run_main(root, config)
+                self.assertFalse(policy.exists())
+        for value in ('false', 0, None):
+            with tempfile.TemporaryDirectory() as temp, self.subTest(value=value), self.assertRaises(SystemExit):
+                self.run_main(Path(temp), self.config(automatic_reboot=value))
+
     def run_main(self, root, config):
         """main() with every absolute path below root, commands recorded and the tunnel step recorded."""
         host_json = json.dumps(config)
