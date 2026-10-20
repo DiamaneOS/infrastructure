@@ -1,6 +1,11 @@
 #!/usr/bin/python3
 # SPDX-License-Identifier: Apache-2.0
-"""Enforce volatile service logging without removing existing log files."""
+"""Enforce the journal policy without removing existing log files.
+
+Service logs stay in memory. A host whose host.json sets system_journal to
+persistent keeps the system journal on disk for 14 days, and its services
+that log to their own namespace keep that in memory."""
+import json
 import os
 from pathlib import Path
 import re
@@ -15,6 +20,15 @@ SYSLOG_UNITS = ('syslog.socket', 'rsyslog.service', 'syslog.service', 'syslog-ng
 MASK_UNITS = SYSLOG_UNITS + ('syslog-ng@.service',)
 EXPECTED = {'Storage': 'volatile', 'RuntimeMaxUse': '160M',
             'MaxRetentionSec': '1day', 'MaxFileSec': '1h', 'ForwardToSyslog': 'no'}
+PERSISTENT = {'Storage': 'persistent', 'SystemMaxUse': '2G', 'RuntimeMaxUse': '160M',
+              'MaxRetentionSec': '14day', 'MaxFileSec': '1day', 'ForwardToSyslog': 'no'}
+POLICIES = {'volatile': EXPECTED, 'persistent': PERSISTENT}
+CHECKED = set(EXPECTED) | set(PERSISTENT)
+# Sorts after zz-diamaneos.conf. Written only on a host with a persistent system journal.
+PERSISTENT_DROPIN = 'zzz-diamaneos-persistent.conf'
+# Journal namespaces of services. Each stays in memory with the volatile policy.
+NAMESPACES = ('attestation',)
+HERE = Path(__file__).resolve().parent
 MAX_OUTPUT = 65536
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}
 
@@ -60,32 +74,32 @@ def journal_settings(text):
             key, value = (part.strip(' \t') for part in row.split('=', 1))
             require(re.fullmatch(r'[A-Za-z][A-Za-z0-9]*', key)
                     and re.fullmatch(r'[A-Za-z0-9_.:/@%+-]*', value))
-            if section == 'Journal' and key in EXPECTED:
+            if section == 'Journal' and key in CHECKED:
                 values[key] = value
     return values
 
 
-def check_journal_policy(text):
-    require(journal_settings(text) == EXPECTED)
+def check_journal_policy(text, expected=EXPECTED):
+    require(journal_settings(text) == expected)
 
 
-def journal_files(root, owner):
+def journal_files(root, owner, name='journald.conf'):
     prefixes = ('etc/systemd', 'run/systemd', 'usr/local/lib/systemd', 'usr/lib/systemd')
     main, dropins = None, {}
     for prefix in prefixes:
         directory = root / prefix
-        for candidate in (directory / 'journald.conf', directory / 'journald.conf.d'):
+        for candidate in (directory / name, directory / (name + '.d')):
             for parent in (root, *candidate.relative_to(root).parents):
                 path = parent if parent == root else root / parent
                 if not path.exists() and not path.is_symlink():
                     continue
                 info = path.lstat()
                 require(stat.S_ISDIR(info.st_mode) and info.st_uid == owner and not info.st_mode & 0o022)
-        path = directory / 'journald.conf'
+        path = directory / name
         if path.exists() or path.is_symlink():
             require(not path.is_symlink())
             if main is None: main = path
-        directory = directory / 'journald.conf.d'
+        directory = directory / (name + '.d')
         if directory.exists() or directory.is_symlink():
             info = directory.lstat()
             require(stat.S_ISDIR(info.st_mode) and info.st_uid == owner and not info.st_mode & 0o022)
@@ -113,17 +127,17 @@ def journal_file(path, owner):
     return identity, body.decode('utf-8')
 
 
-def check_journal_configuration(root=Path('/'), owner=0):
+def check_journal_configuration(root=Path('/'), owner=0, name='journald.conf', policy=EXPECTED):
     """Match native output to independently verified files. Never trust banners."""
     require(root.is_absolute() and not root.is_symlink())
-    paths = journal_files(root, owner)
+    paths = journal_files(root, owner, name)
     snapshots = {path: journal_file(path, owner) for path in paths}
     require(sum(len(body.encode()) for _, body in snapshots.values()) < MAX_OUTPUT)
     values = {}
     for _, body in snapshots.values(): values.update(journal_settings(body))
     argv = ['/usr/bin/systemd-analyze']
     if root != Path('/'): argv.append('--root=' + str(root))
-    _, text = command([*argv, 'cat-config', 'systemd/journald.conf'])
+    _, text = command([*argv, 'cat-config', 'systemd/' + name])
     # Native cat-config inserts one separator between files and emits each
     # source line with a newline. Compare that rendering. Comments resembling
     # file banners never select files or change section lifetime.
@@ -132,7 +146,7 @@ def check_journal_configuration(root=Path('/'), owner=0):
     require(text == expected)
     for path in paths:
         require(journal_file(path, owner) == snapshots[path])
-    require(journal_files(root, owner) == paths and values == EXPECTED)
+    require(journal_files(root, owner, name) == paths and values == policy)
 
 
 def unit_facts(unit):
@@ -177,9 +191,46 @@ def syslog_instances():
     return tuple(sorted(instances))
 
 
+def system_journal(root=Path('/')):
+    """volatile, or persistent when the root-owned host.json says so."""
+    path = root / 'etc/diamaneos/host.json'
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022
+                and info.st_size < MAX_OUTPUT)
+        config = json.loads(stream.read(MAX_OUTPUT))
+    require(type(config) is dict)
+    value = config.get('system_journal', 'volatile')
+    require(value in POLICIES)
+    return value
+
+
+def place_persistent_dropin(storage, root=Path('/')):
+    """Write the persistent drop-in from this tree, or remove it on a volatile host."""
+    path = root / 'etc/systemd/journald.conf.d' / PERSISTENT_DROPIN
+    if storage != 'persistent':
+        path.unlink(missing_ok=True)
+        return
+    body = (HERE / 'journald-persistent.conf').read_bytes()
+    require(journal_settings(body.decode('utf-8')) == PERSISTENT)
+    descriptor, name = tempfile.mkstemp(prefix=PERSISTENT_DROPIN + '.', dir=path.parent)
+    try:
+        with os.fdopen(descriptor, 'wb') as stream:
+            stream.write(body); stream.flush()
+            os.fchmod(stream.fileno(), 0o644); os.fsync(stream.fileno())
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
 def configure_logging():
     require(os.geteuid() == 0)
-    check_journal_configuration()
+    storage = system_journal()
+    place_persistent_dropin(storage)
+    check_journal_configuration(policy=POLICIES[storage])
+    for namespace in NAMESPACES:
+        check_journal_configuration(name=f'journald@{namespace}.conf')
     instances = syslog_instances()
     receivers, masks = SYSLOG_UNITS + instances, MASK_UNITS + instances
     # Mask first so a socket or journal reader cannot reactivate during stops.

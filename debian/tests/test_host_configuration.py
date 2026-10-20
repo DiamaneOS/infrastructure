@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
-KEYS = [base64.b64encode(bytes([n]) * 32).decode() for n in (1, 2, 3)]
+KEYS = [base64.b64encode(bytes([n]) * 32).decode() for n in (1, 2, 3, 4)]
 WIREGUARD = {'listen_port': 51000, 'address': '172.31.255.1/32',
              'peers': [{'address': '172.31.255.2/32', 'public_key': KEYS[0]}]}
 HEALTH = {'name': 'monitor', 'public_key': KEYS[1], 'address': '172.31.255.3/32',
@@ -22,6 +22,30 @@ COLLECTOR = {'reporter': 'health-reporter', 'peers': [
     {'name': 'primary', 'public_key': KEYS[1], 'address': '172.31.255.3/32', 'endpoint': '203.0.113.3:51000', 'keepalive': 25},
     {'name': 'attestation', 'public_key': KEYS[2], 'address': '172.31.255.4/32', 'endpoint': '[2001:db8::4]:51000',
      'keepalive': 25}]}
+UNLOCK = {'name': 'phone', 'public_key': KEYS[3], 'address': '172.31.255.6/32', 'account': 'state-unlock',
+          'key_algorithm': 'ecdsa-sha2-nistp256', 'command': '/usr/local/sbin/state-unlock'}
+UNLOCK_SSHD = '''Match Address 172.31.255.6
+    AllowUsers state-unlock
+Match all
+# Require global PermitUserEnvironment=no and no broader environment override.
+Match User state-unlock
+    AuthenticationMethods publickey
+    PubkeyAuthentication yes
+    PubkeyAcceptedAlgorithms ecdsa-sha2-nistp256
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    PermitTTY yes
+    DisableForwarding yes
+    PermitUserRC no
+    AcceptEnv LANG
+    AllowAgentForwarding no
+    X11Forwarding no
+    MaxSessions 1
+    ForceCommand /usr/local/sbin/state-unlock
+    AuthorizedKeysFile /etc/diamaneos/state-unlock.authorized_keys
+
+Match all
+'''
 CONFIG = {'hostname': 'server.example.org', 'admin_user': 'admin', 'management_mode': 'wireguard',
           'management_cidrs': [], 'interface': 'eth0', 'network_file': '10-eth0.network',
           'bandwidth_mbit': None, 'wireguard': WIREGUARD}
@@ -161,6 +185,43 @@ class HostConfigurationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'health peers require'):
             self.host.management_rules(config)
 
+    def test_unlock_peer_gets_ssh_and_one_forced_command(self):
+        config = self.config(health_peer=HEALTH, unlock_peer=UNLOCK)
+        settings = self.host.wireguard_settings(config)
+        health, unlock = self.host.health_peer(config, settings), self.host.unlock_peer(config, settings)
+        self.assertEqual(RULES.replace('        iifname "wg-mgmt" drop\n',
+                                       '        iifname "wg-mgmt" ip saddr 172.31.255.3 tcp dport 22 ct state new accept\n'
+                                       '        iifname "wg-mgmt" ip saddr 172.31.255.6 tcp dport 22 ct state new accept\n'
+                                       '        iifname "wg-mgmt" drop\n'), self.host.management_rules(config))
+        self.assertTrue(self.host.wireguard_text(settings, 'PRIVATE', health, None, unlock).endswith(
+            f'\n# Restricted unlock peer: phone\n[Peer]\nPublicKey = {KEYS[3]}\nAllowedIPs = 172.31.255.6/32\n'))
+        files = self.host.sshd_files('admin', self.host.reporter_login(settings, health, None), unlock)
+        self.assertEqual('AllowUsers admin health-reporter state-unlock\n', files['/etc/ssh/sshd_config.d/00-diamaneos-admin.conf'])
+        self.assertEqual(UNLOCK_SSHD, files['/etc/ssh/sshd_config.d/02-diamaneos-unlock.conf'])
+        self.assertEqual(REPORTER, files['/etc/ssh/sshd_config.d/01-diamaneos-health.conf'])
+
+    def test_invalid_unlock_peers_are_refused(self):
+        changes = {'missing field': {'command': None}, 'extra field': {'tcp_ports': [22]},
+                   'name': {'name': 'My Phone'}, 'public address': {'address': '192.0.2.6/32'},
+                   'own address': {'address': '172.31.255.1/32'}, 'peer address': {'address': '172.31.255.2/32'},
+                   'health address': {'address': '172.31.255.3/32'}, 'health key': {'public_key': KEYS[1]},
+                   'health name': {'name': 'monitor'}, 'peer key': {'public_key': KEYS[0]},
+                   'root account': {'account': 'root'}, 'admin account': {'account': 'admin'},
+                   'reporter account': {'account': 'health-reporter'}, 'rsa key': {'key_algorithm': 'ssh-rsa'},
+                   'relative command': {'command': 'state-unlock'}, 'command elsewhere': {'command': '/bin/sh'},
+                   'command with arguments': {'command': '/usr/local/sbin/state-unlock status'}}
+        for name, change in changes.items():
+            peer = {**UNLOCK, **change}
+            if change.get('command', 0) is None:
+                del peer['command']
+            config = self.config(health_peer=HEALTH, unlock_peer=peer)
+            with self.subTest(name), self.assertRaises(ValueError):
+                self.host.management_rules(config)
+        config = self.config(management_mode='key-only', unlock_peer=UNLOCK)
+        del config['wireguard']
+        with self.assertRaises(ValueError):
+            self.host.management_rules(config)
+
     def test_downloads_moved_needs_download_addresses(self):
         self.assertTrue(self.host.downloads_moved({'downloads_moved': True}, ['203.0.113.7/32']))
         self.assertFalse(self.host.downloads_moved({'downloads_moved': False}, []))
@@ -188,17 +249,35 @@ class HostConfigurationTest(unittest.TestCase):
                     self.assertEqual('kept\n', (sshd / '01-diamaneos-health.conf').read_text())
                 self.assertEqual(self.host.management_rules(config), (root / 'etc/diamaneos/management.nft').read_text())
                 self.assertEqual(0o600, (root / 'etc/diamaneos/management.nft').stat().st_mode & 0o777)
-                self.assertEqual([(settings, health, collector)], tunnels)
+                self.assertEqual([(settings, health, collector, None)], tunnels)
+                self.assertFalse((sshd / '02-diamaneos-unlock.conf').exists())
                 self.assertEqual('[Address]\nAddress=203.0.113.7/32\n',
                                  (root / 'etc/systemd/network/10-eth0.network.d/60-diamaneos-addresses.conf').read_text())
         with tempfile.TemporaryDirectory() as temp, self.assertRaises(SystemExit):
             self.run_main(Path(temp), self.config(downloads_moved=True))
+        for value in ('on', True):
+            with tempfile.TemporaryDirectory() as temp, self.assertRaises(SystemExit):
+                self.run_main(Path(temp), self.config(system_journal=value))
+
+    def test_main_writes_and_removes_the_unlock_login(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = self.config(unlock_peer=UNLOCK, system_journal='persistent')
+            _, tunnels = self.run_main(root, config)
+            sshd = root / 'etc/ssh/sshd_config.d'
+            self.assertEqual(UNLOCK_SSHD, (sshd / '02-diamaneos-unlock.conf').read_text())
+            self.assertEqual('AllowUsers admin state-unlock\n', (sshd / '00-diamaneos-admin.conf').read_text())
+            self.assertEqual(UNLOCK['public_key'], tunnels[0][3]['public_key'])
+            del config['unlock_peer']
+            self.run_main(root, config)
+            self.assertFalse((sshd / '02-diamaneos-unlock.conf').exists())
+            self.assertEqual('AllowUsers admin\n', (sshd / '00-diamaneos-admin.conf').read_text())
 
     def run_main(self, root, config):
         """main() with every absolute path below root, commands recorded and the tunnel step recorded."""
         host_json = json.dumps(config)
-        (root / 'sys/class/net/eth0').mkdir(parents=True)
-        (root / 'etc/ssh/sshd_config.d').mkdir(parents=True)
+        (root / 'sys/class/net/eth0').mkdir(parents=True, exist_ok=True)
+        (root / 'etc/ssh/sshd_config.d').mkdir(parents=True, exist_ok=True)
         (root / 'etc/ssh/sshd_config.d/01-diamaneos-health.conf').write_text('kept\n')
         (root / 'etc/hosts').write_text('127.0.0.1 localhost\n')
 
@@ -218,6 +297,7 @@ class HostConfigurationTest(unittest.TestCase):
         fake = types.SimpleNamespace(run=lambda argv, **kwargs: commands.append(argv),
                                      check_output=lambda argv, **kwargs: b'1000\n')
         with patch.object(self.host, 'Path', path), patch.object(self.host, 'subprocess', fake), \
+                patch.object(self.host, 'remove', lambda name: path(name).unlink(missing_ok=True)), \
                 patch.object(self.host, 'configure_wireguard', lambda *args: tunnels.append(args)), \
                 patch.dict(os.environ, {'SUDO_USER': 'admin'}):
             self.host.main()

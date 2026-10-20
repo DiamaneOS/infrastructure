@@ -52,6 +52,17 @@ unsuccessful stops fail deployment. Existing persistent logs are preserved.
 Inspect their metadata and handle any removal separately.
 These controls do not set retention for application state or package-manager logs.
 
+A host can keep its system journal on disk instead: `system_journal` set to
+`persistent` in `host.json`. `configure-logging` then writes
+`zzz-diamaneos-persistent.conf` (`Storage=persistent`, `SystemMaxUse=2G`,
+`MaxRetentionSec=14day`, a new file every day), so the cause of a restart can
+be read after it. It removes that file on a host without the setting. Service
+journal namespaces stay volatile on every host: `journald@attestation.conf`
+has the volatile policy above and `configure-logging` checks it. The
+attestation service logs to that namespace (`LogNamespace=attestation` in
+`attestation-debian.conf`), so its output never reaches the disk. Run
+`journalctl --flush` after the switch so journald writes to `/var/log/journal`.
+
 Install the staged infrastructure root-owned at `/opt/diamaneos-infrastructure`.
 On a new host:
 
@@ -113,6 +124,18 @@ and writes the same SSH files, with the host's own tunnel address, so the
 collector can check this host too. These peers get no firewall rule, only their
 replies come back. A host has one of the two fields. Without either the
 reporter's SSH file is left as it is.
+
+`unlock_peer` lets one phone reach SSH over WireGuard to run a single command,
+such as unlocking encrypted state after a restart. It lists the peer's `name`,
+`public_key` and tunnel `address`, the `account` it logs in as, the SSH
+`key_algorithm` of its key and the forced `command` (a program in
+`/usr/local/sbin`). `configure-host` adds the peer and its SSH rule, the account
+to `AllowUsers` and `sshd_config.d/02-diamaneos-unlock.conf`: from the peer's
+address only that account may log in, with a terminal, the forced command, one
+session, no forwarding and keys from
+`/etc/diamaneos/ACCOUNT.authorized_keys`. Without the field that file is
+removed. The account, its key and its sudo rule come from the private
+deployment.
 
 The mirror also serves the unlisted `status.diamaneos.de` from
 `/var/lib/diamaneos-status-page`. A separate monitoring deployment writes that

@@ -19,13 +19,18 @@ loader = importlib.machinery.SourceFileLoader('configure_logging', str(HERE / 'h
 spec = importlib.util.spec_from_loader(loader.name, loader)
 logging = importlib.util.module_from_spec(spec); loader.exec_module(logging)
 POLICY = '[Journal]\nStorage=volatile\nRuntimeMaxUse=160M\nMaxRetentionSec=1day\nMaxFileSec=1h\nForwardToSyslog=no\n'
+PERSISTENT = ('[Journal]\nStorage=persistent\nSystemMaxUse=2G\nRuntimeMaxUse=160M\nMaxRetentionSec=14day\n'
+              'MaxFileSec=1day\nForwardToSyslog=no\n')
 RECEIVERS = ('syslog.socket', 'rsyslog.service', 'syslog.service', 'syslog-ng.service')
 
 
 class Manager:
     """Service lifecycle fixture. Masks block starts but do not stop live readers."""
-    def __init__(self, config=POLICY):
+    def __init__(self, config=POLICY, storage='volatile', namespace=POLICY):
         self.config = config
+        self.storage = storage
+        self.namespace = namespace
+        self.placed = []
         self.active = {unit: 'active' for unit in RECEIVERS}
         self.jobs = dict.fromkeys(RECEIVERS, '')
         self.masked = set()
@@ -69,10 +74,12 @@ class Manager:
 
 @contextlib.contextmanager
 def fixture(manager):
-    def policy():
-        manager.calls.append(['/usr/bin/systemd-analyze','cat-config','systemd/journald.conf'])
-        logging.check_journal_policy(manager.config)
+    def policy(name='journald.conf', policy=logging.EXPECTED):
+        manager.calls.append(['/usr/bin/systemd-analyze','cat-config','systemd/' + name])
+        logging.check_journal_policy(manager.config if name == 'journald.conf' else manager.namespace, policy)
     with (patch.object(logging.os, 'geteuid', return_value=0),
+          patch.object(logging, 'system_journal', side_effect=lambda: manager.storage),
+          patch.object(logging, 'place_persistent_dropin', side_effect=manager.placed.append),
           patch.object(logging, 'check_journal_configuration', side_effect=policy),
           patch.object(logging, 'command', side_effect=manager.command)):
         yield
@@ -140,6 +147,65 @@ class JournalPolicyTest(unittest.TestCase):
         with self.assertRaises(RuntimeError): logging.journal_settings('#' * 65536)
 
 
+class PersistentSystemJournalTest(unittest.TestCase):
+    def test_source_files_carry_the_two_policies(self):
+        logging.check_journal_policy((HERE / 'host/journald-persistent.conf').read_text(), logging.PERSISTENT)
+        logging.check_journal_policy((HERE / 'host/files/etc/systemd/journald@attestation.conf').read_text())
+        self.assertEqual(PERSISTENT, '[Journal]\n' + ''.join(f'{k}={v}\n' for k, v in logging.PERSISTENT.items()))
+        self.assertIn('LogNamespace=attestation\n', (HERE / 'attestation-debian.conf').read_text())
+        self.assertEqual(('attestation',), logging.NAMESPACES)
+
+    def test_persistent_host_checks_its_policy_and_keeps_namespaces_volatile(self):
+        manager = Manager(POLICY + PERSISTENT, storage='persistent')
+        with fixture(manager): logging.configure_logging()
+        self.assertEqual(['persistent'], manager.placed)
+        checked = [argv[2] for argv in manager.calls if argv[1] == 'cat-config']
+        self.assertEqual(['systemd/journald.conf', 'systemd/journald@attestation.conf'], checked)
+        for config, storage, namespace in ((POLICY, 'persistent', POLICY), (POLICY + PERSISTENT, 'volatile', POLICY),
+                                           (POLICY + PERSISTENT, 'persistent', PERSISTENT)):
+            manager = Manager(config, storage=storage, namespace=namespace)
+            with self.subTest(storage=storage), fixture(manager), self.assertRaises(RuntimeError):
+                logging.configure_logging()
+            self.assertFalse(manager.masked)
+
+    def host_json(self, root, text, mode=0o600):
+        path = root / 'etc/diamaneos/host.json'
+        path.parent.mkdir(parents=True, exist_ok=True); path.write_text(text); path.chmod(mode)
+
+    def test_host_json_selects_the_policy(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(logging.os, 'fstat') as fstat:
+            root = Path(temp)
+            def owned(fd, mode=0o100600):
+                info = os.stat(fd)
+                return os.stat_result((mode, *tuple(info)[1:4], 0, *tuple(info)[5:]))
+            for text, want in (('{}', 'volatile'), ('{"system_journal": "volatile"}', 'volatile'),
+                               ('{"system_journal": "persistent"}', 'persistent')):
+                self.host_json(root, text); fstat.side_effect = owned
+                self.assertEqual(want, logging.system_journal(root))
+            for text in ('{"system_journal": "on"}', '{"system_journal": true}', '[]', 'not json'):
+                self.host_json(root, text)
+                with self.subTest(text=text), self.assertRaises((RuntimeError, ValueError)):
+                    logging.system_journal(root)
+            self.host_json(root, '{"system_journal": "persistent"}')
+            fstat.side_effect = lambda fd: owned(fd, 0o100622)
+            with self.assertRaises(RuntimeError): logging.system_journal(root)
+        with tempfile.TemporaryDirectory() as temp:
+            self.host_json(Path(temp), '{}')
+            with self.assertRaises(RuntimeError): logging.system_journal(Path(temp))   # not owned by root
+
+    def test_dropin_is_written_on_persistent_and_removed_on_volatile_hosts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); directory = root / 'etc/systemd/journald.conf.d'; directory.mkdir(parents=True)
+            logging.place_persistent_dropin('persistent', root)
+            path = directory / logging.PERSISTENT_DROPIN
+            self.assertEqual((HERE / 'host/journald-persistent.conf').read_text(), path.read_text())
+            self.assertEqual(0o644, path.stat().st_mode & 0o777)
+            self.assertEqual([path], list(directory.iterdir()))
+            self.assertGreater(logging.PERSISTENT_DROPIN, 'zz-diamaneos.conf')
+            logging.place_persistent_dropin('volatile', root)
+            self.assertEqual([], list(directory.iterdir()))
+
+
 class VerifiedConfigurationTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
@@ -156,8 +222,29 @@ class VerifiedConfigurationTest(unittest.TestCase):
         paths = sorted(self.directory.glob('*.conf'))
         return 0, '\n'.join('# '+str(path)+'\n'+path.read_text() for path in paths)
 
-    def check(self):
-        logging.check_journal_configuration(self.root, owner=os.getuid())
+    def check(self, **kwargs):
+        logging.check_journal_configuration(self.root, owner=os.getuid(), **kwargs)
+
+    def test_persistent_dropin_after_the_final_volatile_one(self):
+        self.write(logging.PERSISTENT_DROPIN, PERSISTENT)
+        with patch.object(logging, 'command', side_effect=lambda *a,**kw:self.native()):
+            self.check(policy=logging.PERSISTENT)
+            with self.assertRaises(RuntimeError): self.check()
+        self.write('zzzz-later.conf', '[Journal]\nMaxRetentionSec=30day\n')
+        with patch.object(logging, 'command', side_effect=lambda *a,**kw:self.native()), self.assertRaises(RuntimeError):
+            self.check(policy=logging.PERSISTENT)
+
+    def test_a_namespace_reads_only_its_own_files(self):
+        (self.root/'etc/systemd/journald@attestation.conf').write_text(POLICY)
+        (self.root/'etc/systemd/journald@attestation.conf').chmod(0o644)
+        def native(argv, **kwargs):
+            self.assertEqual('systemd/journald@attestation.conf', argv[-1])
+            return 0, '# '+str(self.root/'etc/systemd/journald@attestation.conf')+'\n'+POLICY
+        with patch.object(logging, 'command', side_effect=native):
+            self.check(name='journald@attestation.conf')
+        (self.root/'etc/systemd/journald@attestation.conf').write_text(PERSISTENT)
+        with patch.object(logging, 'command', side_effect=native), self.assertRaises(RuntimeError):
+            self.check(name='journald@attestation.conf')
 
     def test_each_actual_file_needs_its_own_section_and_matches_native_output(self):
         with patch.object(logging, 'command', side_effect=lambda *a,**kw:self.native()): self.check()
