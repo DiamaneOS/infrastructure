@@ -107,6 +107,17 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn('Access-Control-Allow-Origin', feed)
         self.assertTrue(feed.endswith('try_files $uri =404;'))
 
+    def test_public_keys_as_on_the_production_website(self):
+        self.render()
+        website = (self.output / 'mirror.conf').read_text().split('server_name staging.diamaneos.de;')[2]
+        self.assertLess(website.index('location ^~ /keys/ {'), website.index('|pem|key|'))
+        block = website.split('location ^~ /keys/ {\n')[1].split('\n    }\n')[0]
+        self.assertIn(r'if ($uri !~ ^/keys/(?:avb_pkmd\.bin|avb\.pub\.pem|factory\.allowed_signers|apps\.0\.pub|'
+                      r'release-list\.pub\.pem)$) { return 404; }', block)
+        self.assertIn('types { application/octet-stream bin; }\n        default_type text/plain;', block)
+        self.assertNotIn('add_header', block)
+        self.assertTrue(block.endswith('try_files $uri =404;'))
+
     def test_website_serves_the_installer_with_its_own_headers(self):
         self.render()
         self.assertNotIn('install.staging', '\n'.join(p.read_text() for p in self.output.glob('*.conf')))

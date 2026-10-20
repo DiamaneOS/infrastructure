@@ -235,6 +235,15 @@ server {
         NOINDEX_HEADER
         try_files $uri =404;
     }
+    # The public keys, as on the production website: only these files, before the rule that refuses .pem names.
+    location ^~ /keys/ {
+        if ($request_method !~ ^(?:GET|HEAD)$) { return 405; }
+        if ($uri !~ ^/keys/(?:avb_pkmd\\.bin|avb\\.pub\\.pem|factory\\.allowed_signers|apps\\.0\\.pub|release-list\\.pub\\.pem)$) { return 404; }
+        types { application/octet-stream bin; }
+        default_type text/plain;
+        charset utf-8;
+        try_files $uri =404;
+    }
     # The short link the setup wizard shows, as on the production website.
     location ~* ^/ubl/?$ { return 301 /faq/#bootloader-locking-setup; }
     location ~ (^|/)\\. { return 404; }
