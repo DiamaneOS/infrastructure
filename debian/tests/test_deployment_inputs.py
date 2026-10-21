@@ -111,7 +111,7 @@ class DeploymentInputsTest(unittest.TestCase):
         self.assertEqual(https.count('add_header'), https.split('\n    location ')[0].count('add_header'))
         self.assertIn('location / { return 404; }', https)
         body = re.search(r'(?m)^        return 200 "([^"]*)";$', https)[1]
-        self.assertEqual('version: STSv1\nmode: testing\nmx: *.mailbox.org\nmax_age: 86400\n', body.replace('\\n', '\n'))
+        self.assertEqual('version: STSv1\nmode: enforce\nmx: *.mailbox.org\nmax_age: 1209600\n', body.replace('\\n', '\n'))
         self.assertNotIn('$', body)
         self.assertNotIn('ads.conf', full)
 
