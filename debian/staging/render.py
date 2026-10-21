@@ -45,6 +45,9 @@ DOMAIN = re.compile(r'(?<![\w.-])(?:[a-z0-9-]+\.)*diamaneos\.de(?![\w.-])')
 RELEASE_SOURCE = ({'website-installer-page.conf'}, 'connect-src https://releases.diamaneos.de;')
 # The website's copy of the installer's headers, for /install/web/.
 INSTALLER_HEADERS = ('website-installer-base.conf', 'website-installer-page.conf', 'website-installer-general.conf')
+# Only for the OS update tests: a second release name, and a file per name that makes it answer 503.
+SECOND_RELEASES = 'releases-na.staging.diamaneos.de'
+FAULTS = BASE + '/releases/fault'
 def require(value, message):
     if not value:
         raise ValueError(message)
@@ -86,10 +89,12 @@ def rewrite(text):
             value = '301 https://staging.diamaneos.de/releases'
         return indent + kind + ' ' + value + ';'
     return DIRECTIVE.sub(directive, text)
-def validate(files, role):
+def validate(files, role, update_tests=False):
     allowed = ({'staging.diamaneos.de', 'releases.staging.diamaneos.de', 'apps.staging.diamaneos.de',
                 'attestation.staging.diamaneos.de'} if role == 'web'
                else {'attestation.staging.diamaneos.de'})
+    if update_tests:
+        allowed.add(SECOND_RELEASES)
     for name, text in files.items():
         if not name.endswith('.conf'):
             continue
@@ -104,6 +109,28 @@ def validate(files, role):
         require('proxy_pass' not in text if role == 'web' else True, 'Static web cannot proxy to a backend')
         for value in re.findall(r'(?m)^\s*include\s+([^;]+);', text):
             require(value in files, 'Unresolved include remains')
+def update_test_releases(text):
+    """Serve the release server blocks under a second name too, without the open-file cache (a swapped
+    package must be served at once), and answer 503 for a name while its fault file exists."""
+    blocks = re.split(r'(?m)^(?=server \{)', text)
+    found_http = found_https = False
+    for index, block in enumerate(blocks):
+        name = re.search(r'(?m)^(\s*)server_name ([^;\n]*(?<![\w.-])releases\.staging\.diamaneos\.de(?![\w.-])[^;\n]*);',
+                         block)
+        if not name:
+            continue
+        indent, line = name[1], name[0]
+        replacement = f'{indent}server_name {name[2]} {SECOND_RELEASES};'
+        if re.search(r'(?m)^\s*listen 443\b', block):
+            block = re.sub(r'[ \t]*\bopen_file_cache_valid [^;\n]+;\n?', '', block)
+            block = re.sub(r'\bopen_file_cache [^;\n]+;', 'open_file_cache off;', block)
+            replacement += f'\n{indent}if (-f {FAULTS}/$host) {{ return 503; }}'
+            found_https = True
+        else:
+            found_http = True
+        blocks[index] = block.replace(line, replacement, 1)
+    require(found_http and found_https, 'Release server blocks are missing')
+    return ''.join(blocks)
 WEBSITE = '''# Browsers revalidate HTML on every visit, as on the production website.
 map $sent_http_content_type $website_cache_control {
     ~^text/html "no-cache";
@@ -274,7 +301,7 @@ def header_file(path, limit=16384):
     require(all(not line.strip() or line.lstrip().startswith('#') or line.lstrip().startswith('add_header ')
                 for line in text.splitlines()), 'Unsupported website header directives')
     return text
-def render(role, source, output, website_headers=None, installer_headers=None):
+def render(role, source, output, website_headers=None, installer_headers=None, update_tests=False):
     source, output = Path(source), Path(output)
     require(source.resolve() == source, 'Symlinked source root is unsupported')
     require(role in ('web', 'attestation-disabled'), 'Unsupported staging role')
@@ -329,13 +356,16 @@ def render(role, source, output, website_headers=None, installer_headers=None):
         files['mirror.conf'] = files['mirror.conf'].replace('NOINDEX_HEADER', noindex)
     require(files['nginx.conf'].count('http {') == 1, 'Explicit HTTP context is required')
     files['nginx.conf'] = files['nginx.conf'].replace('http {', 'http {\n    include noindex.conf;')
-    validate(files, role)
+    if update_tests:
+        require(role == 'web' and 'releases.conf' in files, 'Update tests need the web role')
+        files['releases.conf'] = update_test_releases(files['releases.conf'])
+    validate(files, role, update_tests)
     output.mkdir(mode=0o755)
     for name, text in sorted(files.items()):
         with (output / name).open('x') as stream:
             os.fchmod(stream.fileno(), 0o644)
             stream.write(text)
-    manifest = {'schema_version': 1, 'role': role, 'input_sha256': inputs, 'output_sha256': {name: hashlib.sha256(text.encode()).hexdigest() for name, text in files.items()}}
+    manifest = {'schema_version': 1, 'role': role, 'update_tests': update_tests, 'input_sha256': inputs, 'output_sha256': {name: hashlib.sha256(text.encode()).hexdigest() for name, text in files.items()}}
     with (output / 'rendered.json').open('x') as stream:
         os.fchmod(stream.fileno(), 0o644)
         json.dump(manifest, stream, sort_keys=True, indent=2)
@@ -345,7 +375,8 @@ def main():
     parser.add_argument('source', type=Path); parser.add_argument('output', type=Path)
     parser.add_argument('--website-headers', type=Path)
     parser.add_argument('--installer-headers', type=Path, help="the website's server/nginx folder")
+    parser.add_argument('--update-tests', action='store_true', help='the second release name, no file cache, fault files')
     args = parser.parse_args()
-    render(args.role, args.source, args.output, args.website_headers, args.installer_headers)
+    render(args.role, args.source, args.output, args.website_headers, args.installer_headers, args.update_tests)
 if __name__ == '__main__':
     main()

@@ -63,6 +63,38 @@ class RenderTests(unittest.TestCase):
         website = (self.output / 'mirror.conf').read_text().split('server_name staging.diamaneos.de;')[2]
         self.assertIn('keepalive_requests 64;\n    keepalive_timeout 15s;', website.split('server {')[0])
 
+    def test_update_tests_add_second_release_name_fault_files_and_no_file_cache(self):
+        release = self.source / 'releases/nginx/releases.conf'
+        release.write_text(
+            'server {\n listen 80;\n server_name releases.diamaneos.de apps.diamaneos.de;\n location / { return 404; }\n}\n'
+            'server {\n listen 443 ssl;\n server_name releases.diamaneos.de;\n'
+            ' ssl_certificate /etc/letsencrypt/live/diamaneos-artifacts/fullchain.pem;\n'
+            ' ssl_certificate_key /etc/letsencrypt/live/diamaneos-artifacts/privkey.pem;\n'
+            ' open_file_cache max=2048 inactive=1d;\n open_file_cache_valid 1d;\n'
+            ' location /metadata { open_file_cache max=1 inactive=1d;\n  open_file_cache_valid 5s; }\n}\n'
+            'server {\n listen 443 ssl;\n server_name apps.diamaneos.de;\n'
+            ' ssl_certificate /etc/letsencrypt/live/diamaneos-artifacts/fullchain.pem;\n'
+            ' ssl_certificate_key /etc/letsencrypt/live/diamaneos-artifacts/privkey.pem;\n'
+            ' open_file_cache max=2048 inactive=1d;\n include root_apps.diamaneos.de.conf;\n}\n')
+        self.render()
+        plain = (self.output / 'releases.conf').read_text()
+        self.assertNotIn('releases-na.staging', plain)
+        self.assertNotIn('/releases/fault', plain)
+        shutil.rmtree(self.output)
+        renderer.render('web', self.source, self.output, self.headers, self.installer, update_tests=True)
+        text = (self.output / 'releases.conf').read_text()
+        http, https, apps = text.split('server {')[1:]
+        self.assertIn('server_name releases.staging.diamaneos.de apps.staging.diamaneos.de releases-na.staging.diamaneos.de;', http)
+        self.assertNotIn('/releases/fault', http)
+        self.assertIn('server_name releases.staging.diamaneos.de releases-na.staging.diamaneos.de;\n'
+                      ' if (-f /srv/diamaneos-staging/releases/fault/$host) { return 503; }', https)
+        self.assertEqual(2, https.count('open_file_cache off;'))
+        self.assertNotIn('open_file_cache_valid', https)
+        self.assertNotIn('releases-na', apps)
+        self.assertIn('open_file_cache max=2048', apps)
+        with self.assertRaises(ValueError):
+            renderer.render('attestation-disabled', self.source, self.root / 'other', update_tests=True)
+
     def test_staging_crawler_policy_merges_into_locations_without_duplicates(self):
         self.render()
         text='\n'.join(p.read_text() for p in self.output.glob('*.conf'))
