@@ -141,6 +141,13 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn('Access-Control-Allow-Origin', feed)
         self.assertTrue(feed.endswith('try_files $uri =404;'))
 
+    def test_website_answers_missing_pages_with_its_404_page(self):
+        self.render()
+        text = (self.output / 'mirror.conf').read_text()
+        self.assertEqual(1, text.count('error_page 404 /404.html;'))
+        website = text.split('server_name staging.diamaneos.de;')[2].split('\n}\n')[0]
+        self.assertIn('error_page 404 /404.html;', website)
+
     def test_public_keys_as_on_the_production_website(self):
         self.render()
         website = (self.output / 'mirror.conf').read_text().split('server_name staging.diamaneos.de;')[2]

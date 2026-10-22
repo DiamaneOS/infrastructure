@@ -158,6 +158,7 @@ server {
     keepalive_timeout 15s;
     include website-headers.conf;
     add_header Cache-Control $website_cache_control always;
+    error_page 404 /404.html;
     location = /contact/submit { return 503; }
     location = /robots.txt { default_type text/plain; return 200 "User-agent: *\\nDisallow: /\\n"; }
     location = /healthz { default_type text/plain; return 200 "ready\\n"; }
