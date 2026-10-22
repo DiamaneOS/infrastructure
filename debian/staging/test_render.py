@@ -145,6 +145,8 @@ class RenderTests(unittest.TestCase):
         self.render()
         website = (self.output / 'mirror.conf').read_text().split('server_name staging.diamaneos.de;')[2]
         self.assertLess(website.index('location ^~ /keys/ {'), website.index('|pem|key|'))
+        for location in ('/keys', '/keys/'):
+            self.assertIn('location = ' + location + ' { return 301 /documentation/keys/; }', website)
         block = website.split('location ^~ /keys/ {\n')[1].split('\n    }\n')[0]
         self.assertIn(r'if ($uri !~ ^/keys/(?:avb_pkmd\.bin|avb\.pub\.pem|factory\.allowed_signers|apps\.0\.pub|'
                       r'release-list\.pub\.pem)$) { return 404; }', block)

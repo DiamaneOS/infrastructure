@@ -264,6 +264,9 @@ server {
         try_files $uri =404;
     }
     # The public keys, as on the production website: only these files, before the rule that refuses .pem names.
+    # /keys itself leads to their page.
+    location = /keys { return 301 /documentation/keys/; }
+    location = /keys/ { return 301 /documentation/keys/; }
     location ^~ /keys/ {
         if ($request_method !~ ^(?:GET|HEAD)$) { return 405; }
         if ($uri !~ ^/keys/(?:avb_pkmd\\.bin|avb\\.pub\\.pem|factory\\.allowed_signers|apps\\.0\\.pub|release-list\\.pub\\.pem)$) { return 404; }
