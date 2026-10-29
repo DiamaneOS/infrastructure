@@ -92,9 +92,18 @@ def notify(message):
             channel.sendto(message.encode(), address)
 
 
+def change_line(previous, result):
+    """One journal line when readiness or its reason changes, so a 503 window shows in the log."""
+    if previous is not None and (previous['healthy'], previous['reason']) == (result['healthy'], result['reason']):
+        return None
+    sources = f", {result['selected_sources']} authenticated sources" if 'selected_sources' in result else ''
+    return f"Clock {'ready' if result['healthy'] else 'not ready'}: {result['reason']}{sources}"
+
+
 def main():
     if sys.argv[1:] not in ([], ['--once']):
         raise SystemExit('usage: clock-readiness [--once]')
+    previous = None
     while True:
         try:
             policy = Path('/etc/chrony/chrony.conf')
@@ -105,6 +114,10 @@ def main():
                 result = health(query('tracking'), query('sources'), time.time())
         except (OSError, ValueError, csv.Error, subprocess.SubprocessError):
             result = {'healthy': False, 'reason': 'clock-monitor-unavailable'}
+        line = change_line(previous, result)
+        if line:
+            print(line, flush=True)
+        previous = result
         marker = RUNTIME / 'ready'
         if result['healthy']:
             marker.touch()

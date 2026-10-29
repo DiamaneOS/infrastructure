@@ -46,6 +46,16 @@ class ClockReadinessTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 clock.health(tracking, self.sources, self.now)
 
+    def test_logs_only_changes_of_readiness_or_reason(self):
+        ready = {'healthy': True, 'reason': 'ready', 'selected_sources': 6}
+        short = {'healthy': False, 'reason': 'insufficient-authenticated-sources', 'selected_sources': 2}
+        self.assertEqual('Clock ready: ready, 6 authenticated sources', clock.change_line(None, ready))
+        self.assertIsNone(clock.change_line(ready, dict(ready, selected_sources=5)))
+        self.assertEqual('Clock not ready: insufficient-authenticated-sources, 2 authenticated sources',
+                         clock.change_line(ready, short))
+        self.assertEqual('Clock not ready: clock-monitor-unavailable',
+                         clock.change_line(short, {'healthy': False, 'reason': 'clock-monitor-unavailable'}))
+
 
 if __name__ == '__main__':
     unittest.main()
