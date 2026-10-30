@@ -188,9 +188,12 @@ Release-signing keys are excluded from serving hosts.
 - Service sandboxes and UID firewall rules restrict host IPC and outbound access.
   Primary relays share nginx’s UID. Attestation has a separate service account.
 - The role firewall allows each IPv4 address or IPv6 /64 32 connections to the
-  web ports, and to SUPL on the primary. Further connections get a TCP reset.
-  New connections above `nf_conntrack_max`/64 per second go through synproxy.
-  Both follow GrapheneOS's network firewall, as do the conntrack and TCP timeouts.
+  web ports, and to SUPL on the primary. Further connections get a TCP reset. A
+  real client's connection is counted at its SYN. A SYN that carries no MSS option,
+  like the spoofed reflection SYNs, and any SYN above the rate instead go to
+  synproxy, so they leave no state until the client answers the cookie, and such a
+  connection is counted where synproxy hands it on. The caps follow GrapheneOS's
+  network firewall, as do the conntrack and TCP timeouts.
 - Management WireGuard packets are not connection-tracked. `bandwidth_mbit` in
   `host.json` sets CAKE at 99.75 % of the provisioned rate.
 - Request logs are disabled. TLS-terminating relays process request payloads.

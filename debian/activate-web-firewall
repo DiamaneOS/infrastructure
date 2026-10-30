@@ -3,27 +3,48 @@
 """Open only the selected role's public ports, preserving private management."""
 import json
 from pathlib import Path
+import re
 import subprocess
 
 HERE = Path(__file__).resolve().parent
 PORTS = {'primary': '80, 443, 7275', 'mirror': '80, 443', 'attestation': '80, 443'}
 
 
-def render(template, role, wireguard_port, conntrack_max):
-    """The role's policy. Synproxy takes new connections above conntrack_max/64 per second."""
+def render(template, role, wireguard_port, conntrack_max, mtu, mtu6, receive_buffer):
+    """The role's policy. Synproxy takes every new connection. Its MSS fits the interface MTU and
+    its window scale is the kernel's own for the largest receive buffer (tcp_select_initial_window),
+    as synproxy does not translate windows. SYNs above conntrack_max/64 per second are counted."""
     if role not in PORTS:
         raise SystemExit('invalid web role')
     if type(wireguard_port) is not int or not 1024 <= wireguard_port <= 65535:
         raise SystemExit('invalid WireGuard UDP port')
     if type(conntrack_max) is not int or conntrack_max < 64:
         raise SystemExit('invalid connection tracking size')
+    if any(type(m) is not int or not 1280 <= m <= 65535 for m in (mtu, mtu6)):
+        raise SystemExit('invalid interface MTU')
+    if type(receive_buffer) is not int or not 65536 <= receive_buffer < 1 << 32:
+        raise SystemExit('invalid TCP receive buffer size')
     text = (template.replace('{{tcp_ports}}', PORTS[role])
             .replace('{{wireguard_port}}', str(wireguard_port))
             .replace('{{synproxy_threshold}}', str(conntrack_max // 64))
-            .replace('{{conntrack_max}}', str(conntrack_max)))
+            .replace('{{conntrack_max}}', str(conntrack_max))
+            .replace('{{mss_ipv4}}', str(mtu - 40))
+            .replace('{{mss_ipv6}}', str(mtu6 - 60))
+            .replace('{{wscale}}', str(min(14, receive_buffer.bit_length() - 16))))
     if '{{' in text:
         raise SystemExit('unrendered firewall placeholder')
     return text
+
+
+def tcp_inputs(interface):
+    """The interface's IPv4 and IPv6 MTU and the largest TCP receive buffer, for synproxy."""
+    if not re.fullmatch(r'[A-Za-z0-9_.-]{1,15}', interface):
+        raise SystemExit('invalid interface name')
+    mtu = int(Path('/sys/class/net', interface, 'mtu').read_text())
+    mtu6 = int(Path('/proc/sys/net/ipv6/conf', interface, 'mtu').read_text())
+    receive_buffer = max(int(Path('/proc/sys/net/ipv4/tcp_rmem').read_text().split()[2]),
+                         int(Path('/proc/sys/net/core/rmem_max').read_text()))
+    return mtu, mtu6, receive_buffer
 
 
 def main():
@@ -33,7 +54,8 @@ def main():
         raise SystemExit('verified WireGuard-only management required')
     subprocess.run(['systemctl', 'is-active', '--quiet', 'wg-quick@wg-mgmt'], check=True)
     conntrack_max = int(Path('/proc/sys/net/netfilter/nf_conntrack_max').read_text())
-    text = render((HERE / 'nftables-web.conf').read_text(), role, host['wireguard']['listen_port'], conntrack_max)
+    text = render((HERE / 'nftables-web.conf').read_text(), role, host['wireguard']['listen_port'], conntrack_max,
+                  *tcp_inputs(host['interface']))
     candidate = Path('/etc/nftables.conf.candidate')
     candidate.write_text(text)
     subprocess.run(['nft', '-c', '-f', str(candidate)], check=True)
