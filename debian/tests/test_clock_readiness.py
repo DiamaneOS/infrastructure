@@ -26,13 +26,26 @@ class ClockReadinessTest(unittest.TestCase):
                 policy + '\nsourcedir /run/sources', policy.replace('require', 'ignore')):
             self.assertFalse(clock.authenticated_policy(invalid))
 
-    def test_requires_three_fresh_combined_sources_and_the_actual_reference(self):
+    def test_requires_three_fresh_selected_sources_and_the_actual_reference(self):
         self.assertTrue(clock.health(self.tracking, self.sources, self.now)['healthy'])
         for sources in (self.sources.splitlines()[0], self.sources.replace(',1,0,0,0.01',
                 ',400,0,0,0.01'), self.sources.replace('^,*', '^,+')):
             self.assertFalse(clock.health(self.tracking, sources, self.now)['healthy'])
         self.assertFalse(clock.health(self.tracking.replace('192.0.2.1', '192.0.2.9'),
             self.sources, self.now)['healthy'])
+
+    def test_counts_accepted_sources_outside_the_average_but_never_rejected_ones(self):
+        # chrony leaves accepted sources with a larger delay out of its average (-). They still agree.
+        apart = self.sources.replace('^,+', '^,-')
+        self.assertEqual(3, clock.health(self.tracking, apart, self.now)['selected_sources'])
+        self.assertTrue(clock.health(self.tracking, apart, self.now)['healthy'])
+        for flag in ('x', '~', '?', ' '):
+            with self.subTest(flag):
+                result = clock.health(self.tracking, self.sources.replace('^,+', f'^,{flag}'), self.now)
+                self.assertFalse(result['healthy'])
+                self.assertEqual(1, result['selected_sources'])
+        unreachable = apart.replace('192.0.2.3,1,6,377', '192.0.2.3,1,6,0')
+        self.assertFalse(clock.health(self.tracking, unreachable, self.now)['healthy'])
 
     def test_rejects_stale_or_unsynchronised_time_and_accepts_announced_leap(self):
         self.assertFalse(clock.health(self.tracking, self.sources, self.now + 301)['healthy'])
