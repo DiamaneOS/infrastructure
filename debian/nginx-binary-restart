@@ -1,0 +1,145 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+"""Restart nginx once it runs code a package upgrade replaced.
+
+Package upgrades replace /usr/sbin/nginx (nginx.org releases through unattended upgrades) or a library nginx
+maps (OpenSSL in Debian security updates), but nginx keeps running the old code until it restarts. The APT hook
+starts this after every dpkg run. It waits until no package run holds dpkg's locks, then tests the configuration
+with the new binary through the unit's reload, which runs the test as the serving user and leaves the running nginx
+untouched when it fails. Then it waits for open connections to end, up to IDLE_WAIT, and restarts nginx.
+"""
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+# apt holds lock-frontend for its whole run, hooks included, and dpkg holds lock.
+DPKG_LOCKS = ('/var/lib/dpkg/lock-frontend', '/var/lib/dpkg/lock')
+PACKAGE_WAIT = 3600
+IDLE_WAIT = 1800
+POLL = 10
+BINARY = '/usr/sbin/nginx'
+PORTS = {80, 443}
+PROC = Path('/proc')
+
+
+def log(message):
+    print(message, flush=True)
+
+
+def systemctl(*args):
+    return subprocess.run(['/usr/bin/systemctl', *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          text=True, timeout=300)
+
+
+def main_pid():
+    result = systemctl('show', '--property=MainPID', '--value', 'nginx.service')
+    value = result.stdout.strip()
+    return int(value) if result.returncode == 0 and value.isdecimal() and int(value) > 0 else None
+
+
+def replaced(exe, maps):
+    """Replaced files the process runs: its binary, or a library mapped from a file that no longer exists."""
+    found = set()
+    if exe != BINARY:
+        found.add(exe)
+    for line in maps.splitlines():
+        parts = line.split(None, 5)
+        # Anonymous shared memory shows as "/dev/zero (deleted)", so only files under /usr and /lib count.
+        if len(parts) == 6 and parts[5].endswith(' (deleted)') and parts[5].startswith(('/usr/', '/lib')):
+            found.add(parts[5])
+    return sorted(found)
+
+
+def stale(pid):
+    try:
+        exe = os.readlink(PROC / str(pid) / 'exe')
+        maps = (PROC / str(pid) / 'maps').read_text()
+    except (FileNotFoundError, ProcessLookupError):
+        # The process ended meanwhile. Any other error stops the run, so it cannot pass as nothing replaced.
+        return []
+    return replaced(exe, maps)
+
+
+def held(locks, files):
+    """Whether /proc/locks (its text) shows a lock on one of files, each as (major, minor, inode)."""
+    for line in locks.splitlines():
+        fields = [field for field in line.split() if field != '->']
+        device = fields[5].split(':') if len(fields) > 5 else []
+        if len(device) == 3 and (int(device[0], 16), int(device[1], 16), int(device[2])) in files:
+            return True
+    return False
+
+
+def busy():
+    """Whether a package run holds dpkg's locks, so the upgrade it does is not finished yet. Process names
+    would not do: unattended-upgrades keeps a process of that name running for shutdowns."""
+    files = set()
+    for path in DPKG_LOCKS:
+        try:
+            info = os.stat(path)
+        except OSError:
+            continue
+        files.add((os.major(info.st_dev), os.minor(info.st_dev), info.st_ino))
+    try:
+        return held((PROC / 'locks').read_text(), files)
+    except OSError:
+        return False
+
+
+def established(tables):
+    """Established TCP connections on the served ports, from the text of /proc/net/tcp and tcp6."""
+    count = 0
+    for table in tables:
+        for line in table.splitlines()[1:]:
+            fields = line.split()
+            if len(fields) > 3 and fields[3] == '01' and int(fields[1].rsplit(':', 1)[1], 16) in PORTS:
+                count += 1
+    return count
+
+
+def connections():
+    tables = []
+    for name in ('tcp', 'tcp6'):
+        try:
+            tables.append((PROC / 'net' / name).read_text())
+        except OSError:
+            pass
+    return established(tables)
+
+
+def wait(condition, limit):
+    deadline = time.monotonic() + limit
+    while condition() and time.monotonic() < deadline:
+        time.sleep(POLL)
+
+
+def main():
+    pid = main_pid()
+    if pid is None or not stale(pid):
+        return 0
+    wait(busy, PACKAGE_WAIT)
+    pid = main_pid()
+    files = stale(pid) if pid else []
+    if not files:
+        return 0
+    log('nginx runs replaced files: ' + ', '.join(files))
+    test = systemctl('reload', 'nginx.service')
+    if test.returncode:
+        log('The new nginx refuses the configuration, so nginx keeps serving the old code: ' + test.stdout.strip())
+        return 1
+    wait(connections, IDLE_WAIT)
+    log(f'Restarting nginx with {connections()} open connections')
+    restart = systemctl('restart', 'nginx.service')
+    pid = main_pid()
+    files = stale(pid) if pid else ['no running nginx']
+    if restart.returncode or files:
+        log('The restart did not leave nginx running the new code: ' + (restart.stdout.strip() or ', '.join(files)))
+        return 1
+    log('nginx runs the new code')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

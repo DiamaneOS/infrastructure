@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# Started by the APT hook 54diamaneos-nginx-restart after every dpkg run. It runs as root to drive the
+# system manager, so it is named outside diamaneos-*, whose shared worker sandbox blocks that.
+[Unit]
+Description=Restart nginx once it runs code a package upgrade replaced
+After=nginx.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/diamaneos-nginx-binary-restart
+# Package wait, idle wait and a restart that waits for nginx to stop.
+TimeoutStartSec=100min
+CapabilityBoundingSet=CAP_SYS_PTRACE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+MemoryMax=64M
+TasksMax=16

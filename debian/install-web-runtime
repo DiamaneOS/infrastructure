@@ -77,6 +77,10 @@ install -m 0755 "$here/refresh-egress" /usr/local/sbin/diamaneos-refresh-egress
 install -m 0644 "$here/egress_config.py" /usr/local/sbin/egress_config.py
 install -m 0644 "$here/diamaneos-egress.service" /etc/systemd/system/diamaneos-egress.service
 install -m 0644 "$here/diamaneos-egress.timer" /etc/systemd/system/diamaneos-egress.timer
+# Package upgrades leave nginx running the code they replaced. The hook restarts it on the new code.
+install -m 0755 "$here/nginx-binary-restart" /usr/local/sbin/diamaneos-nginx-binary-restart
+install -o root -g root -m 0644 "$here/nginx-binary-restart.service" /etc/systemd/system/nginx-binary-restart.service
+install -o root -g root -m 0644 "$here/apt-nginx-restart.conf" /etc/apt/apt.conf.d/54diamaneos-nginx-restart
 systemctl daemon-reload
 systemctl enable --now "$mount_unit" session-ticket-keys-create.service
 systemctl enable session-ticket-keys-rotate.timer diamaneos-egress.timer

@@ -86,6 +86,15 @@ rollback.
 Validate and reload nginx through its systemd unit, which runs as the serving
 user. A bare root `nginx -t` can leave incorrectly owned PID/cache files.
 
+Package upgrades leave nginx running the code they replaced: nginx.org releases
+through unattended upgrades (`53diamaneos-nginx-unattended`) and Debian's OpenSSL
+updates. `install-web-runtime` installs an APT hook (`54diamaneos-nginx-restart`)
+that starts `nginx-binary-restart.service` after every dpkg run. Once no package
+run holds dpkg's locks, it tests the configuration with the new binary through the unit's
+reload, waits up to 30 minutes for open connections on ports 80 and 443 to end,
+and restarts nginx. A refused test leaves the old nginx serving and the unit
+failed, with the reason in its journal.
+
 The primary configuration accepts an optional local `website.conf` include.
 Website content, its certificate and contact handler are supplied by the
 website deployment. This repository does not stage them. The website deployment
